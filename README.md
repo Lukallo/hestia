@@ -14,7 +14,7 @@
 
 - **Your work is saved without being touched.** Uncommitted changes in every repo you worked in today go into a `refs/hestia/<timestamp>` snapshot. Your branch, working tree and index stay exactly as they were.
 - **The agents stop when you do.** Unattended Claude Code runs get `SIGTERM`. Open sessions are paused by a hook until the next working morning.
-- **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, no dashboard.
+- **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, nothing always on screen.
 
 <p align="center">
   <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
@@ -76,7 +76,7 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Six commands, two hooks, nothing else
+## Seven commands, two hooks, nothing else
 
 | | Command | What happens |
 |---|---|---|
@@ -84,6 +84,7 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 | <img src="assets/icons/rest.svg" width="40" alt="Rest: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list, because the day isn't over |
 | <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and reminds you of the one thing you were mid-way through |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused or on a break, and today's load, only ever when you ask |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes |
 | <img src="assets/icons/home.svg" width="40" alt="Home: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, built from your real commits and prompts. Paste it into an update instead of writing one |
 | <img src="assets/icons/kindling.svg" width="40" alt="Kindling: one new thing, not the woodpile"> | `/hestia:new` | Reads only what changed in Claude Code since your version or your last check, and shows you **one** thing from it, in five lines |
 
@@ -260,13 +261,14 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
+| Dashboard page | `~/.hestia/dashboard.html`, only after `/hestia:dashboard` | delete it |
 | Config | `~/.hestia/config.json` (optional) | delete it |
 
 It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything. `/hestia:new` is the only piece that uses the network, and only to read Claude Code's public changelog.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 29 checks, 40 tests
+## Prove it: 29 checks, 45 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -312,14 +314,14 @@ PASS new degrades cleanly offline
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 40 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 45 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 40 tests in 2.234s
+Ran 45 tests in 2.568s
 
 OK
 ```
@@ -331,7 +333,7 @@ OK
 The brief's one rule is that it has to give time back, not help you do more. So:
 
 - **No notifications, reminders or nudges.** Nothing ever interrupts you. Every command runs because you typed it.
-- **No dashboard.** The workload numbers live inside `/hestia:today` and are shown only when asked. A thing you have to check is a thing that costs attention.
+- **No live dashboard.** The workload numbers live inside `/hestia:today`, and `/hestia:dashboard` writes the same facts to a static page, both only when asked. Nothing refreshes, nothing sits open in a tab, and there are no totals or comparisons. A thing you have to check is a thing that costs attention.
 - **No streaks, scores or goals.** Measuring rest turns rest into work.
 - **No summary at shutdown.** `/hestia:done` answers in three lines and stops. A command that ends the day shouldn't give you more to read.
 - **No break suggestions.** `/hestia:break` says when it ends and what it saved. What you do on it is yours.
@@ -341,7 +343,7 @@ The time it saves is the stashing, the "where was I?" note, the morning re-orien
 
 ## Scope
 
-All six commands that [PLAN.md](PLAN.md) designs are built. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the six commands have been used for real.
+All six commands that [PLAN.md](PLAN.md) designs are built, plus `/hestia:dashboard`, which was added later. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
 
 ## Honest limitations
 
@@ -378,6 +380,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built. The automatic pieces
 python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix"
 python3 plugins/hestia/scripts/hestia.py break 45m
 python3 plugins/hestia/scripts/hestia.py today
+python3 plugins/hestia/scripts/hestia.py dashboard
 python3 plugins/hestia/scripts/hestia.py back
 python3 plugins/hestia/scripts/hestia.py why
 python3 plugins/hestia/scripts/hestia.py new
@@ -385,7 +388,7 @@ python3 plugins/hestia/scripts/hestia.py new
 
 `break` takes `45m`, `1h30m`, `90` or an end time like `13:50`, plus `--stop-agents` and `--json`. `why` takes `--days N`, `--repo PATH` and `--json`. `new` takes `--since VERSION` and `--json`.
 
-`shutdown` also takes `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`.
+`shutdown` also takes `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`. `dashboard` takes `--out PATH` and `--no-open`.
 
 </details>
 

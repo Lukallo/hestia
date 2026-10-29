@@ -42,7 +42,7 @@ correctness bug.
 | Path | What it is |
 |---|---|
 | `plugins/hestia/scripts/hestia.py` | The whole engine and a standalone CLI. Standard library only. |
-| `plugins/hestia/commands/*.md` | The six slash commands. Each one runs `hestia.py` first, then has Claude phrase the result. |
+| `plugins/hestia/commands/*.md` | The seven slash commands. Each one runs `hestia.py` first, then has Claude phrase the result. |
 | `plugins/hestia/hooks/hooks.json` | `PreToolUse` runs the pause, and `SessionStart` with the `startup` matcher runs the handover. |
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
@@ -76,6 +76,7 @@ someone's work.
 | `/hestia:break [45m]` | `break [length]` | snapshot refs, `pause.json` (kind `break`) | Writes no list and never touches `handover.json`. Signals nothing unless `--stop-agents` |
 | `/hestia:back` | `back` | deletes `pause.json` | After a break it prints restore lines; after `done` it points to the list |
 | `/hestia:today` | `today` | nothing | Only ever shown when asked |
+| `/hestia:dashboard` | `dashboard` | `dashboard.html` only | The `today` reading as one static page: no scripts, no network, no refresh. Allowed while paused because it only reads |
 | `/hestia:why [who for]` | `why --json` | nothing | Facts only; Claude writes the paragraph |
 | `/hestia:new` | `new --json` | `digest.json` | The only network use; offline means "nothing to do" |
 
@@ -93,6 +94,7 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 | `TOMORROW.md` | Markdown; the note is the first line starting with `> ` | Rewritten by each `done` |
 | `handover.json` | `{for: <TOMORROW.md mtime>, consumed: bool}` | Re-armed by `done`, consumed by the first `SessionStart` after the pause |
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
+| `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `config.json` | `{resume_hour, working_days (Mon=0), repos}` | Optional; only the user creates it |
 
 Snapshots live in each repo as `refs/hestia/<YYYY-MM-DD-HHMMSS>`. They are
@@ -127,8 +129,8 @@ the test.
    temporary `GIT_INDEX_FILE`. **Never** replace this with `git stash`,
    `git add` on the real index, or a commit on the user's branch.
 2. **The pause never blocks the way back in.** `RESUME_PATTERN` in
-   `hestia.py` allowlists `back`/`resume` and `today`/`status`, along with the
-   hook commands. The hook tests cover several spellings, including the old
+   `hestia.py` allowlists `back`/`resume`, `today`/`status` and the read-only
+   `dashboard`, along with the hook commands. The hook tests cover several spellings, including the old
    aliases. If you rename a command, update the pattern and those tests in
    the same change.
 3. **The handover happens exactly once per list, and never while paused.** A
