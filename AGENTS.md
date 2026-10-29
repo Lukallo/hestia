@@ -112,8 +112,9 @@ plain commits whose parent is `HEAD`. They are never on a branch.
 ### Data sources
 
 - **Prompts** come from `~/.claude/projects/*/*.jsonl`, or `$HESTIA_LOG_DIR`.
-  When Claude Code runs with `CLAUDE_CONFIG_DIR`, the logs, `CLAUDE.md` and
-  `.claude.json` all live in that folder instead, and Hestia follows it.
+  When Claude Code runs with `CLAUDE_CONFIG_DIR`, the logs, auto memory,
+  `CLAUDE.md`, `settings.json` and `.claude.json` all live in that folder
+  instead, and Hestia follows it.
   The `HESTIA_*` overrides still win.
   Only `type == "user"` entries with string content count. Sidechains,
   tool results and anything starting with `<` are skipped.

@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 44 checks, 104 tests
+## Prove it: 47 checks, 113 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -420,20 +420,23 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
 PASS init remove restores CLAUDE.md exactly
+PASS dream plan backs up today's memory
+PASS dream check rolls back a broken tidy
+PASS dream restore puts memory back exactly
 
-44/44 checks passed
+47/47 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 104 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 113 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 104 tests in 20.857s
+Ran 113 tests in 21.286s
 
 OK
 ```
@@ -568,7 +571,7 @@ Optional, at `~/.hestia/config.json`:
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 
-If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work and a personal account apart, Hestia follows it: it reads that account's session logs and writes its `/hestia:init` section to that account's `CLAUDE.md`.
+If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work and a personal account apart, Hestia follows it: it reads that account's session logs, tidies that account's memory at `done`, and writes its `/hestia:init` section to that account's `CLAUDE.md`.
 
 </details>
 

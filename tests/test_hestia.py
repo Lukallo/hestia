@@ -1263,7 +1263,8 @@ class TestClaudeConfigDir(TempHome):
 
     def setUp(self):
         super().setUp()
-        for name in ("HESTIA_LOG_DIR", "HESTIA_CLAUDE_DIR", "HESTIA_CLAUDE_JSON", "CLAUDE_CONFIG_DIR"):
+        for name in ("HESTIA_LOG_DIR", "HESTIA_CLAUDE_DIR", "HESTIA_CLAUDE_JSON",
+                     "HESTIA_MEMORY_ROOT", "CLAUDE_CONFIG_DIR"):
             os.environ.pop(name, None)
         self.config = self.tmp / "claude-work"
 
@@ -1271,12 +1272,14 @@ class TestClaudeConfigDir(TempHome):
         self.assertEqual(hestia.log_dir(), Path.home() / ".claude" / "projects")
         self.assertEqual(hestia.claude_dir(), Path.home() / ".claude")
         self.assertEqual(hestia.claude_json_path(), Path.home() / ".claude.json")
+        self.assertEqual(hestia.memory_root(), Path.home() / ".claude" / "projects")
 
     def test_follows_claude_config_dir(self):
         os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
         self.assertEqual(hestia.log_dir(), self.config / "projects")
         self.assertEqual(hestia.claude_dir(), self.config)
         self.assertEqual(hestia.claude_json_path(), self.config / ".claude.json")
+        self.assertEqual(hestia.memory_root(), self.config / "projects")
 
     def test_reads_prompts_from_that_account_only(self):
         os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
@@ -1294,6 +1297,8 @@ class TestClaudeConfigDir(TempHome):
         os.environ["HESTIA_LOG_DIR"] = str(self.logs)
         os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "c")
         os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "c.json")
+        os.environ["HESTIA_MEMORY_ROOT"] = str(self.tmp / "m")
+        self.assertEqual(hestia.memory_root(), self.tmp / "m")
         self.assertEqual(hestia.log_dir(), self.logs)
         self.assertEqual(hestia.claude_dir(), self.tmp / "c")
         self.assertEqual(hestia.claude_json_path(), self.tmp / "c.json")

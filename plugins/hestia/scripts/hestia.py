@@ -28,7 +28,7 @@ Environment overrides (used by the tests and selftest):
 
 <claude dir> is $CLAUDE_CONFIG_DIR when Claude Code was started with it, else ~/.claude.
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
-    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
+    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default <claude dir>/projects
 """
 
 import argparse
@@ -2334,7 +2334,9 @@ LINK_PATTERN = re.compile(r"\]\(([^)\s]+\.md)\)")
 
 
 def memory_root():
-    return Path(os.environ.get("HESTIA_MEMORY_ROOT") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_MEMORY_ROOT"):
+        return Path(os.environ["HESTIA_MEMORY_ROOT"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def memory_slug(path):
