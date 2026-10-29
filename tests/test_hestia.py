@@ -201,6 +201,7 @@ class TestPauseAndHook(TempHome):
             "python hestia.py today",
             "python3 hestia.py resume",  # old alias must still get through
             "python hestia.py status",
+            "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
@@ -703,6 +704,67 @@ class TestConnectorGate(TempHome):
         self.assertEqual(self.gate("slack"), 1)
         hestia.init_write({"connectors": {"slack": "allowed"}}, str(self.tmp), ["slack"])
         self.assertEqual(self.gate("slack"), 0)
+
+
+class TestDashboard(TempHome):
+    def render(self):
+        out = self.tmp / "dashboard.html"
+        args = hestia.argparse.Namespace(out=str(out), no_open=True)
+        self.assertEqual(hestia.cmd_dashboard(args), 0)
+        return out.read_text()
+
+    def write_prompts(self, times):
+        project = self.logs / "-tmp-proj"
+        project.mkdir(exist_ok=True)
+        with (project / "session.jsonl").open("w") as handle:
+            for when in times:
+                handle.write(json.dumps({
+                    "type": "user", "timestamp": when.isoformat(), "cwd": "/tmp/proj",
+                    "message": {"content": "please fix <b>this</b>"},
+                }) + "\n")
+
+    def test_empty_day_still_renders(self):
+        page = self.render()
+        self.assertIn("Working.", page)
+        self.assertIn("No prompts recorded today.", page)
+        self.assertIn("No list yet.", page)
+
+    def test_shows_load_breaks_and_pause(self):
+        now = datetime.now().astimezone()
+        base = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        self.write_prompts([base, base + timedelta(minutes=5), base + timedelta(minutes=50)])
+        hestia.write_json(hestia.pause_path(), {
+            "until": (now + timedelta(hours=8)).isoformat(), "note": "<script>x</script>",
+        })
+        page = self.render()
+        self.assertIn("Clocked out until", page)
+        self.assertIn("45 min", page, "the gap is marked as a break")
+        self.assertIn('class="tick"', page)
+        self.assertNotIn("<script>", page, "everything from logs and notes is escaped")
+        self.assertIn("&lt;script&gt;", page)
+
+    def test_a_break_reads_as_a_break(self):
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "break",
+            "until": (datetime.now().astimezone() + timedelta(minutes=30)).isoformat(),
+        })
+        page = self.render()
+        self.assertIn("On a break until", page)
+        self.assertNotIn("Clocked out", page)
+
+    def test_lists_snapshots_with_the_restore_line(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        hestia.snapshot_repo(repo, "refs/hestia/2026-10-29-180000", "test")
+        hestia.write_json(self.home / "config.json", {"repos": [str(repo)]})
+        page = self.render()
+        self.assertIn("refs/hestia/2026-10-29-180000", page)
+        self.assertIn("checkout refs/hestia/2026-10-29-180000 -- .", page)
+
+    def test_writes_nothing_but_the_page(self):
+        self.render()
+        self.assertFalse(hestia.pause_path().exists())
+        self.assertFalse((self.home / "TOMORROW.md").exists())
 
 
 if __name__ == "__main__":
