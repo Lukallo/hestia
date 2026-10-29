@@ -193,8 +193,10 @@ class TestPauseAndHook(TempHome):
     def test_never_blocks_the_way_back_in(self):
         self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
         for command in [
-            "python3 hestia.py resume",
-            'python3 "/plugins/hestia/scripts/hestia.py" resume',
+            "python3 hestia.py back",
+            'python3 "/plugins/hestia/scripts/hestia.py" back',
+            "python hestia.py today",
+            "python3 hestia.py resume",  # old alias must still get through
             "python hestia.py status",
         ]:
             self.assertEqual(

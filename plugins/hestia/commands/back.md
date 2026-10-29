@@ -6,7 +6,7 @@ allowed-tools: Bash, Read
 Lift the pause:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" resume
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" back
 ```
 
 If the command prints a path to a list, read it and give the user back the one

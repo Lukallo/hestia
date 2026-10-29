@@ -12,7 +12,7 @@ session has been about — plain language, who the work helps, no jargon. Keep i
 under about fifteen words.
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" shutdown --note "<the note>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" done --note "<the note>"
 ```
 
 Then report back in **three lines at most**: what got saved, when the pause

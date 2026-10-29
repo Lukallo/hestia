@@ -3,10 +3,11 @@
 
 Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 
-    hestia.py shutdown [--note TEXT] [--until WHEN] [--json]
-    hestia.py resume
-    hestia.py status [--json]
+    hestia.py done  [--note TEXT] [--until WHEN] [--json]   (alias: shutdown)
+    hestia.py back                                          (alias: resume)
+    hestia.py today [--json]                                (alias: status)
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
+    hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
@@ -31,7 +32,9 @@ DEFAULT_WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday-Friday
 
 # Bash commands matching this are always allowed while paused, otherwise the
 # pause would block the only command that lifts it.
-RESUME_PATTERN = re.compile(r"hestia(?:\.py)?['\"]?\s+(resume|status|hook|selftest)\b")
+RESUME_PATTERN = re.compile(
+    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|hook|session-start|selftest)\b"
+)
 
 
 # --------------------------------------------------------------------------
@@ -753,7 +756,7 @@ def cmd_hook(args):
         if RESUME_PATTERN.search(command):
             return 0
 
-    reason = "Clocked out until %s. Run /hestia:resume if tonight can't wait." % human(
+    reason = "Clocked out until %s. Run /hestia:back if tonight can't wait." % human(
         pause["_until"]
     )
     print(
@@ -888,9 +891,9 @@ def cmd_selftest(args):
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
         # --keep-agents: the selftest must never touch real processes.
-        proc = run(["shutdown", "--note", "selftest", "--keep-agents", "--json"])
+        proc = run(["done", "--note", "selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
-        check("shutdown runs", ok, proc.stderr.decode().strip()[:200])
+        check("done runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
             return 1
         result = json.loads(proc.stdout.decode())
@@ -922,7 +925,7 @@ def cmd_selftest(args):
         decision = _hook_decision(
             script, {"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py resume"}}, env
         )
-        check("hook always allows resume", decision == "allow")
+        check("hook always allows back", decision == "allow")
 
         # The morning handover: not while paused, once afterwards, then silent.
         def handover():
@@ -936,8 +939,11 @@ def cmd_selftest(args):
 
         check("no handover while still paused", handover() == "")
 
-        proc = run(["resume"])
-        check("resume runs", proc.returncode == 0)
+        proc = run(["back"])
+        check("back runs", proc.returncode == 0)
+
+        check("old names still work as aliases", run(["status"]).returncode == 0
+              and run(["today"]).returncode == 0)
 
         first = handover()
         check("morning gets yesterday's list", "Where you left off" in first)
@@ -945,7 +951,7 @@ def cmd_selftest(args):
         check("handover happens only once", handover() == "")
 
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
-        check("hook is silent after resume", decision == "allow")
+        check("hook is silent after back", decision == "allow")
 
         # An expired pause lets you back in on its own.
         past = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
@@ -967,7 +973,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="hestia", description="End the working day in Claude Code.")
     sub = parser.add_subparsers(dest="command")
 
-    p = sub.add_parser("shutdown", help="save open work, write tomorrow's list, pause agents")
+    # The old names stay as aliases, so anything already wired up keeps working.
+    p = sub.add_parser("done", aliases=["shutdown"], help="save open work, write tomorrow's list, pause agents")
     p.add_argument("--note", default="", help="one line about what today was for")
     p.add_argument("--until", default="", help="HH:MM or ISO timestamp (default: next working morning)")
     p.add_argument("--keep-agents", action="store_true", help="report running agents but don't stop them")
@@ -975,10 +982,10 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_shutdown)
 
-    p = sub.add_parser("resume", help="lift the pause early")
+    p = sub.add_parser("back", aliases=["resume"], help="lift the pause early")
     p.set_defaults(func=cmd_resume)
 
-    p = sub.add_parser("status", help="show the pause and today's load")
+    p = sub.add_parser("today", aliases=["status"], help="show the pause and today's load")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_status)
 
