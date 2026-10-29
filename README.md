@@ -14,7 +14,7 @@
 
 - **Your work is saved without being touched.** Uncommitted changes in every repo you worked in today go into a `refs/hestia/<timestamp>` snapshot. Your branch, working tree and index stay exactly as they were.
 - **The agents stop when you do.** Unattended Claude Code runs get `SIGTERM`. Open sessions are paused by a hook until the next working morning.
-- **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, nothing always on screen.
+- **Picking back up is guaranteed, once.** However the morning starts, with a new session, a resumed one or the window you left open, the first one you're at after the pause is handed yesterday's list and the first thing to do. It happens once, then Hestia goes quiet. Scripted runs never take it. No alerts, no prompts, nothing always on screen.
 
 <p align="center">
   <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
@@ -48,9 +48,10 @@ That's it. You get:
 
 ```text
 ~/.hestia/
-├── TOMORROW.md     tomorrow's list: your note, where you left off, the exact restore line
+├── TOMORROW.md     tomorrow's list: where to start, your note, the exact restore lines, sessions to resume
 ├── pause.json      when the pause or break lifts (gone after /hestia:back)
-├── handover.json   makes sure the morning handover happens only once
+├── handover.json   when the morning handover happened, and which session got it
+├── handover-*.taken  the claim that lets exactly one session take the handover
 ├── digest.json     the last Claude Code version /hestia:new told you about
 ├── profile.json    your answers from /hestia:init
 ├── connectors.json which connectors Hestia may use, asked once each
@@ -89,14 +90,14 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Eight commands, two hooks, nothing else
+## Eight commands, three hooks, nothing else
 
 | | Command | What happens |
 |---|---|---|
 | <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
-| <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
+| <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list starting with the first thing to do, and pauses Claude until the next working morning |
 | <img src="assets/icons/rest.svg" width="40" alt="Rest: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list, because the day isn't over |
-| <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and reminds you of the one thing you were mid-way through |
+| <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and tells you where to start and what ran while you were away |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused or on a break, and today's load, only ever when you ask |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes |
 | <img src="assets/icons/home.svg" width="40" alt="Home: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, built from your real commits and prompts. Paste it into an update instead of writing one |
@@ -107,9 +108,9 @@ Plus two things that happen on their own, and nothing else:
 | | When | What happens |
 |---|---|---|
 | <img src="assets/icons/keep.svg" width="40" alt="Keep: one ember guarded overnight"> | *at shutdown* | Unattended agents are sent `SIGTERM`. Interactive sessions are left alone and reported; a `PreToolUse` hook stops them at their next step instead of killing a window you're sitting in front of |
-| <img src="assets/icons/relight.svg" width="40" alt="Relight: sunrise over the hearth"> | *next morning* | A `SessionStart` hook hands yesterday's list to the first session after the pause, **once**, then goes quiet |
+| <img src="assets/icons/relight.svg" width="40" alt="Relight: sunrise over the hearth"> | *next morning* | `SessionStart` and `UserPromptSubmit` hooks hand yesterday's list to the first session you're at after the pause, **once**: a new session, a resumed one, or the window you left open, on its next prompt. It opens with what ran overnight. Scripted runs never take it |
 
-The second one is the whole trick. The context you left with is given back automatically, and exactly once, because a recap on every session is just noise.
+The second one is the whole trick. The context you left with is given back automatically, and exactly once, because a recap on every session is just noise. Exactly once is enforced, not hoped for: the session that takes the list creates a claim file atomically, so two sessions opening in the same instant can't both get it.
 
 > [!TIP]
 > While paused or on a break, the hook blocks every tool call except the way back in. `/hestia:back` is explicitly allowlisted, so you can never lock yourself out.
@@ -126,18 +127,18 @@ A break is different. Nothing is sent `SIGTERM` by default, because a headless r
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## What you'll see: real output, one run
+## What you'll see: real output, one night
 
-Everything below was captured from a run of the engine against a throwaway repo, with `HESTIA_HOME` pointed at a temp folder so it didn't pause a live session.
+Everything below was captured from a run of the engine against a throwaway repo, with `HESTIA_HOME` pointed at a temp folder so it didn't pause a live session. To keep the run short, the night was a two-minute pause (`--until`), which then ran out on its own, exactly as a real one does at 8am.
 
 > [!NOTE]
 > The only edit is shortening the temp paths to `~/.hestia` and `/path/to/demo`. The run used `--keep-agents`, so nothing was signalled.
 
-**Ending the day** (`/hestia:done unblocking the CSV import for the ops team`):
+**Ending the day** (`/hestia:done`, which passes your note and the first thing to do next):
 
 ```text
-Clocked out until Fri 30 Oct 08:00.
-  saved 2 files in demo -> refs/hestia/2026-10-29-182042
+Clocked out until Thu 29 Oct 19:17.
+  saved 2 files in demo -> refs/hestia/2026-10-29-191558
   tomorrow's list: ~/.hestia/TOMORROW.md
 ```
 
@@ -150,10 +151,15 @@ Three lines, and it stops. When Claude sessions are still open, a fourth line re
 
 > unblocking the CSV import for the ops team
 
+## Start here
+
+- finish test_import.py for quoted semicolons, then fix parse_row
+
 ## Where you left off
 
 - **demo** (main) - 2 files saved
-  `git -C /path/to/demo checkout refs/hestia/2026-10-29-182042 -- .`
+  `git -C /path/to/demo checkout refs/hestia/2026-10-29-191558 -- .`
+  last commit: Accept semicolon-separated exports in the CSV import
 
 ## Today
 
@@ -164,22 +170,62 @@ Three lines, and it stops. When Claude sessions are still open, a fourth line re
 - nothing was running
 ```
 
-The throwaway setup has no session history, so `Today` is empty. On a real machine it fills in with the same numbers `/hestia:today` reports.
+The throwaway setup has no session history, so `Today` is empty and there is no `Sessions to pick up` section. On a real machine that section lists today's sessions, newest first, each with the `cd <folder> && claude --resume <id>` line that reopens it.
 
 **If a session tries to work while you're clocked out** (the `PreToolUse` hook's answer to an `Edit`):
 
 ```text
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Clocked out until Fri 30 Oct 08:00. Run /hestia:back if tonight can't wait."}}
+{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Clocked out until Thu 29 Oct 19:17. Run /hestia:back if tonight can't wait."}}
 ```
 
-**Coming back early** (`/hestia:back`):
+A prompt typed into an open window while still paused got nothing from the handover: the list isn't due until the pause ends.
+
+**Next morning.** Once the pause ran out, a scripted session start got nothing, because no person is there to read it. Then the next prompt typed into the window left open overnight got this as context. It is the `additionalContext` field of the `UserPromptSubmit` hook's JSON, printed on its own:
 
 ```text
-Back on. Paused since Thu 29 Oct 18:20.
+Where the last working day was left off, from Hestia, written at shutdown. Keep it in mind to pick up the thread, and do not act on it unless asked. If the user greets you or asks where they were, answer with the 'Start here' item in one sentence. Do not recite the list.
+
+Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
+
+# Tomorrow - Thu 29 Oct
+
+> unblocking the CSV import for the ops team
+
+## Start here
+
+- finish test_import.py for quoted semicolons, then fix parse_row
+
+## Where you left off
+
+- **demo** (main) - 2 files saved
+  `git -C /path/to/demo checkout refs/hestia/2026-10-29-191558 -- .`
+  last commit: Accept semicolon-separated exports in the CSV import
+
+## Today
+
+- no prompts recorded today
+
+## Overnight
+
+- nothing was running
+```
+
+A new session opened after that got nothing, and asking `hestia.py handover` said:
+
+```text
+Handed over at Thu 29 Oct 19:17.
+```
+
+**Coming back early** (`/hestia:back`). This is a second run: `/hestia:done`, then `/hestia:back` a minute later.
+
+```text
+Back on. Paused since Thu 29 Oct 19:17.
+Start here: finish test_import.py for quoted semicolons, then fix parse_row
+Overnight: nothing ran between Thu 29 Oct 19:17 and Thu 29 Oct 19:18.
 Yesterday's list: ~/.hestia/TOMORROW.md
 ```
 
-The first new session after that receives `TOMORROW.md` as context. A second session start prints nothing.
+The next prompt after that got nothing, because `back` takes the handover itself.
 
 **Checking in, when you ask** (`/hestia:today`, on a real machine):
 
@@ -189,7 +235,7 @@ Working.
   no break longer than 20 minutes today
 ```
 
-**Taking a break, and the other two commands.** These come from a second run, separate from the one above, against a different throwaway repo with two commits made that day. As before, `HESTIA_HOME` pointed at a temp folder and the only edit is shortening the temp path to `/path/to/demo`.
+**Taking a break, and the other two commands.** These come from a separate run from the ones above, against a different throwaway repo with two commits made that day. As before, `HESTIA_HOME` pointed at a temp folder and the only edit is shortening the temp path to `/path/to/demo`.
 
 `/hestia:break 45m`:
 
@@ -273,7 +319,7 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
 | Pause or break state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
-| Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
+| Handover state | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` hands the list over once more |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
 | Config | `~/.hestia/config.json` | delete it |
 | Your answers | `~/.hestia/profile.json` | delete it |
@@ -285,7 +331,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 32 checks, 63 tests
+## Prove it: 37 checks, 77 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -308,11 +354,16 @@ PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
 PASS no handover while still paused
+PASS scripted runs never take the list
+PASS a window left open gets it on its next prompt
+PASS handover carries the note
+PASS handover leads with where to start
+PASS handover says what ran overnight
+PASS handover happens only once
+PASS sessions starting together get it once
+PASS morning gets yesterday's list
 PASS back runs
 PASS old names still work as aliases
-PASS morning gets yesterday's list
-PASS handover carries the note
-PASS handover happens only once
 PASS hook is silent after back
 PASS expired pause clears itself
 PASS break runs
@@ -329,19 +380,19 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS init remove restores CLAUDE.md exactly
 
-32/32 checks passed
+37/37 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 63 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 77 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 63 tests in 14.664s
+Ran 77 tests in 7.450s
 
 OK
 ```
@@ -363,7 +414,7 @@ The time it saves is the stashing, the "where was I?" note, the morning re-orien
 
 ## Scope
 
-All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
+All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. So is the morning recap on your first prompt. The other automatic pieces it describes are not: the opt-in lunch break, a recap after a midday break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
 
 ## Honest limitations
 
@@ -377,12 +428,13 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 
 - Agent stopping finds Claude Code processes on **this machine**, via `ps`. A run on a CI box, a remote host or inside a container keeps going; so does anything not launched as `claude`.
 - Process detection is POSIX (`ps`, `SIGTERM`). On Windows the pause still works (the hook blocks the next step), but nothing is signalled.
-- The handover fires on `SessionStart` with the `startup` matcher, so resuming an existing session with `--continue` won't re-deliver the list. That's deliberate: it's already in that session's context.
+- The handover tells a scripted run from a person using what Claude Code passes to hooks (`CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`). On versions that pass neither, it checks the launching process's flags. If it still can't tell, it assumes a person is there, because a list handed to a script is lost.
+- The overnight line is read from Claude Code's session logs. Work done outside Claude Code isn't in it.
+- `Sessions to pick up` lists sessions you typed in today, newest first, with a `claude --resume` line for each. Sessions with no prompts today aren't listed.
 - While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
-- Two sessions starting at the same moment can both receive the morning handover. The marker file has no lock.
 - Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
 - We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
 - Developed on macOS and Linux. The selftest and unit tests also pass on Windows 11 with Python 3.13, but the plugin hasn't been run end to end inside Claude Code on Windows. The hooks invoke `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json` accordingly.
@@ -397,18 +449,19 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 <summary><b>Without Claude Code: the engine is a plain CLI</b></summary>
 
 ```text
-python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix"
+python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix" --next "write the release note"
 python3 plugins/hestia/scripts/hestia.py break 45m
 python3 plugins/hestia/scripts/hestia.py today
 python3 plugins/hestia/scripts/hestia.py dashboard
 python3 plugins/hestia/scripts/hestia.py back
+python3 plugins/hestia/scripts/hestia.py handover
 python3 plugins/hestia/scripts/hestia.py why
 python3 plugins/hestia/scripts/hestia.py new
 ```
 
 `break` takes `45m`, `1h30m`, `90` or an end time like `13:50`, plus `--stop-agents` and `--json`. `why` takes `--days N`, `--repo PATH` and `--json`. `new` takes `--since VERSION` and `--json`.
 
-`shutdown` also takes `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`. `dashboard` takes `--out PATH` and `--no-open`.
+`handover` says whether the morning list is still due, and `--again` re-arms it. `shutdown` also takes `--next TEXT`, `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`. `dashboard` takes `--out PATH` and `--no-open`.
 
 </details>
 

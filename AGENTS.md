@@ -21,7 +21,7 @@ It beats every other consideration, including features a user asks an agent
 for in passing. In practice:
 
 - No notifications, reminders, nudges, dashboards, streaks, scores or goals.
-- Nothing runs unless the user typed it, except the two hooks, which stay
+- Nothing runs unless the user typed it, except the three hooks, which stay
   silent unless there is something they must do.
 - Every command answers briefly and stops. `done` uses three lines at most,
   `break` two, `new` five, and `why` one paragraph.
@@ -43,7 +43,7 @@ correctness bug.
 |---|---|
 | `plugins/hestia/scripts/hestia.py` | The whole engine and a standalone CLI. Standard library only. |
 | `plugins/hestia/commands/*.md` | The eight slash commands. Each one runs `hestia.py` first, then has Claude phrase the result. |
-| `plugins/hestia/hooks/hooks.json` | `PreToolUse` runs the pause, and `SessionStart` with the `startup` matcher runs the handover. |
+| `plugins/hestia/hooks/hooks.json` | `PreToolUse` runs the pause. `SessionStart` (startup and resume) and `UserPromptSubmit` run the morning handover. |
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
 | `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. |
@@ -72,7 +72,7 @@ someone's work.
 
 | Slash command | Engine call | Writes | Notes |
 |---|---|---|---|
-| `/hestia:done [note]` | `done --note ...` | snapshot refs, `TOMORROW.md`, `pause.json` (kind `done`), `handover.json` (re-armed) | SIGTERMs headless agents unless `--keep-agents` |
+| `/hestia:done [note]` | `done --note ... --next ...` | snapshot refs, `TOMORROW.md`, `pause.json` (kind `done`), `handover.json` (re-armed) | SIGTERMs headless agents unless `--keep-agents` |
 | `/hestia:break [45m]` | `break [length]` | snapshot refs, `pause.json` (kind `break`) | Writes no list and never touches `handover.json`. Signals nothing unless `--stop-agents` |
 | `/hestia:back` | `back` | deletes `pause.json` | After a break it prints restore lines; after `done` it points to the list |
 | `/hestia:today` | `today` | nothing | Only ever shown when asked |
@@ -83,7 +83,9 @@ someone's work.
 
 The CLI also accepts `shutdown`, `resume` and `status` as argparse aliases of
 `done`, `back` and `today`. Keep them, because old setups call them. Internal
-subcommands are `hook`, `session-start` and `selftest`.
+subcommands are `hook`, `session-start`, `prompt-submit` and `selftest`.
+`handover` reports whether the morning list is still due, and `handover --again`
+re-arms it.
 
 ### State files
 
@@ -93,7 +95,8 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 |---|---|---|
 | `pause.json` | `{kind: "done" or "break", until, since, ...}`. A `done` pause also has `note` and `tomorrow`; a `break` has `saved: [{repo, ref, restore}]` | Deleted by `back`, or on the first read after `until` has passed. A file with no `kind` is treated as `done` |
 | `TOMORROW.md` | Markdown; the note is the first line starting with `> ` | Rewritten by each `done` |
-| `handover.json` | `{for: <TOMORROW.md mtime>, consumed: bool}` | Re-armed by `done`, consumed by the first `SessionStart` after the pause |
+| `handover.json` | `{for: <TOMORROW.md mtime_ns>, consumed, since, back_at?, at?, via?, session?}` | Re-armed by `done`. `since` is the shutdown time and `back_at` an early `back`, which bound the overnight fact. A file whose `for` is a float mtime with `consumed: true` comes from before claims and still counts as handed over |
+| `handover-<mtime_ns>.taken` | Empty claim file | Created with `O_CREAT \| O_EXCL` by the one session that takes the handover. `done` and `handover --again` delete them. This file, not `handover.json`, is what makes the handover happen exactly once |
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
 | `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `profile.json`, `connectors.json` | The answers and connector consent from `init` | Rewritten by `init`; `init remove` takes the CLAUDE.md section out |
@@ -116,8 +119,11 @@ plain commits whose parent is `HEAD`. They are never on a branch.
 
 ### Hooks must cost nothing on a normal day
 
-Both hooks run on every tool call or session start for every user. With no
-pause and nothing to hand over, they must return immediately with no output.
+The hooks run on every tool call, session start and prompt for every user.
+With no pause and nothing to hand over, they must return immediately with no
+output. `handover_due()` is the gate for both handover hooks: on a normal day
+it costs one or two `stat` calls after reading the hook's input. Always read
+the input first, so Claude Code never writes into a closed pipe.
 Don't add work before the "is there anything to do?" check. Don't import
 anything slow at module level. Keep the 5-second timeouts in `hooks.json`.
 
@@ -135,8 +141,15 @@ the test.
    `dashboard`, along with the hook commands. The hook tests cover several spellings, including the old
    aliases. If you rename a command, update the pattern and those tests in
    the same change.
-3. **The handover happens exactly once per list, and never while paused.** A
-   new `done` re-arms it. A break never arms or consumes it.
+3. **The handover happens exactly once per list, never while paused, and
+   never to a scripted run.** The claim is an `O_EXCL` file, so a race between
+   sessions has one winner; the selftest races eight and a test races twelve.
+   It reaches every way a morning starts: a new or resumed session
+   (`SessionStart`), a window left open (`UserPromptSubmit`), or `/hestia:back`,
+   which takes it itself. A headless session (`CLAUDE_CODE_SESSION_ATTENDED=0`
+   or `CLAUDE_CODE_ENTRYPOINT=sdk-*`) must never take it. A new `done` re-arms
+   it. A break never arms or consumes it. Tests set `HESTIA_SESSION_KIND` so
+   they behave the same in a terminal, CI or `claude -p`.
 4. **A break can't shorten the night.** `break` refuses while a `done` pause
    is active, and refuses lengths over four hours.
 5. **Expired pauses clear themselves.** No pause, of either kind, needs
@@ -302,11 +315,10 @@ These are known and documented. Don't half-fix them in an unrelated change.
 
 | Gap | State |
 |---|---|
-| Handover race | Two sessions starting at once can both read `handover.json` before either writes it. No file lock. Documented in the README's limitations |
 | Windows | The hooks call `python3`, which is usually `python` on Windows. Agent stopping uses `ps` and `SIGTERM`, which are POSIX only. The pause itself works |
 | Plugin icon | Missing. The directory wants a square PNG, 512 to 2048 px. SVG is not accepted, so `assets/logo.svg` needs rendering |
 | Licence | Missing. The maintainers must choose one |
-| PLAN pieces not built | The lunch break, the recap on the first prompt after a break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
+| PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
 | Remote agents | Only processes on this machine can be stopped |
 
 ## 12. Troubleshooting
@@ -315,7 +327,8 @@ These are known and documented. Don't half-fix them in an unrelated change.
 |---|---|
 | Every tool call is denied with "Clocked out until..." | A real `done` pause. Run `/hestia:back`, or delete `~/.hestia/pause.json` |
 | Denied with "On a break until..." | A real break. It lifts itself at that time, or `/hestia:back` ends it |
-| The morning list didn't appear | Either the session was resumed with `--continue` (the hook matches `startup` only), the pause hadn't expired yet, or it was already handed over. Delete `~/.hestia/handover.json` to get it again |
+| The morning list didn't appear | Run `hestia.py handover`. It says whether the list is still due, waiting for the pause, or already handed over and when. `handover.json` records which session got it (`via`, `session`, `cwd`), which may have been another window. `handover --again` hands it over once more |
+| A scripted run got the list | The hook couldn't tell it was headless: its Claude Code passed neither `CLAUDE_CODE_SESSION_ATTENDED` nor `CLAUDE_CODE_ENTRYPOINT`, and its process flags had no `--print`. Set `HESTIA_SESSION_KIND=headless` in that job's environment |
 | `why` shows no commits for a repo with commits today | They were authored under a different identity from the one `git var GIT_AUTHOR_IDENT` reports there |
 | `new` always says nothing changed | `digest.json` already records the newest version. Delete it, or pass `--since` |
 | The selftest fails only on `why` | The commit identity differs from the git identity. The selftest sets `GIT_AUTHOR_EMAIL`; check nothing in your environment overrides it |
