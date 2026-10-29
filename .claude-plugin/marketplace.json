@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "End the working day in Claude Code.",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "hestia",
       "source": "./plugins/hestia",
-      "description": "Save open work, write tomorrow's list, and pause agents until morning."
+      "description": "End the working day: save open work, write tomorrow's list, pause agents until morning, and take real breaks."
     }
   ]
 }

@@ -303,6 +303,201 @@ class TestShutdownEndToEnd(TempHome):
         self.assertIn("refs/hestia/", text)
 
 
+class TestBreak(TempHome):
+    """A break is the same pause with kind=break: no list, lifts itself."""
+
+    def take_break(self, repo, length="30m"):
+        cwd = os.getcwd()
+        os.chdir(str(repo))
+        try:
+            # break never signals anything unless --stop-agents is passed;
+            # it is left off here so a test can't touch real processes.
+            args = hestia.argparse.Namespace(length=length, json=True, stop_agents=False)
+            return hestia.cmd_break(args)
+        finally:
+            os.chdir(cwd)
+
+    def hook_reason(self, payload):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "hook"],
+            input=json.dumps(payload).encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ),
+        )
+        out = proc.stdout.decode().strip()
+        return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"] if out else ""
+
+    def test_lengths_it_understands(self):
+        now = datetime(2026, 10, 29, 12, 0).astimezone()
+        self.assertEqual(hestia.parse_break("", now), now + timedelta(minutes=45))
+        self.assertEqual(hestia.parse_break("45m", now), now + timedelta(minutes=45))
+        self.assertEqual(hestia.parse_break("1h", now), now + timedelta(hours=1))
+        self.assertEqual(hestia.parse_break("1h30m", now), now + timedelta(minutes=90))
+        self.assertEqual(hestia.parse_break("90", now), now + timedelta(minutes=90))
+        self.assertEqual(hestia.parse_break("13:50", now).strftime("%H:%M"), "13:50")
+
+    def test_refuses_lengths_that_are_not_a_break(self):
+        now = datetime(2026, 10, 29, 12, 0).astimezone()
+        for bad in ["soon", "0m", "11:00", "5h", "25:00"]:
+            with self.assertRaises(SystemExit, msg=bad):
+                hestia.parse_break(bad, now)
+
+    def test_break_saves_pauses_and_leaves_the_repo_alone(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("mid-thought\n")
+        index_before = hestia.index_fingerprint(repo)
+        status_before = hestia.git(repo, ["status", "--porcelain"]).out
+
+        self.assertEqual(self.take_break(repo), 0)
+
+        pause = hestia.read_pause()
+        self.assertEqual(pause["kind"], "break")
+        self.assertEqual(len(pause["saved"]), 1)
+        self.assertIn("refs/hestia/", pause["saved"][0]["restore"])
+        self.assertEqual(hestia.index_fingerprint(repo), index_before)
+        self.assertEqual(hestia.git(repo, ["status", "--porcelain"]).out, status_before)
+
+    def test_break_writes_no_list_and_leaves_the_handover_alone(self):
+        repo = self.make_repo()
+        self.home.mkdir(parents=True, exist_ok=True)
+        handover = self.home / "handover.json"
+        handover.write_text('{"for": 1, "consumed": false}\n')
+        self.take_break(repo)
+        self.assertFalse((self.home / "TOMORROW.md").exists())
+        self.assertEqual(handover.read_text(), '{"for": 1, "consumed": false}\n')
+
+    def test_hook_names_the_break_and_still_lets_back_through(self):
+        self.take_break(self.make_repo())
+        reason = self.hook_reason({"tool_name": "Edit", "tool_input": {"file_path": "a.py"}})
+        self.assertIn("On a break until", reason)
+        self.assertEqual(
+            self.hook_reason({"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py back"}}),
+            "",
+        )
+
+    def test_back_gives_back_where_you_were(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("mid-thought\n")
+        self.take_break(repo)
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "back"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ),
+        )
+        out = proc.stdout.decode()
+        self.assertIn("On a break since", out)
+        self.assertIn("Before the break: git -C", out)
+        self.assertNotIn("Yesterday's list", out)
+        self.assertIsNone(hestia.read_pause())
+
+    def test_a_break_lifts_itself(self):
+        hestia.write_json(
+            hestia.pause_path(),
+            {"kind": "break", "until": (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()},
+        )
+        self.assertIsNone(hestia.read_pause())
+        self.assertFalse(hestia.pause_path().exists())
+
+    def test_a_break_cannot_shorten_the_night(self):
+        night = datetime.now().astimezone() + timedelta(hours=10)
+        hestia.write_json(hestia.pause_path(), {"kind": "done", "until": night.isoformat()})
+        self.take_break(self.make_repo(), "15m")
+        pause = hestia.read_pause()
+        self.assertEqual(pause["kind"], "done")
+        self.assertEqual(pause["_until"].replace(microsecond=0), night.replace(microsecond=0))
+
+    def test_old_pause_files_still_count_as_done(self):
+        hestia.write_json(
+            hestia.pause_path(),
+            {"until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat()},
+        )
+        self.assertEqual(hestia.read_pause()["kind"], "done")
+
+
+class TestWhy(TempHome):
+    def setUp(self):
+        super().setUp()
+        # why reports only your own commits; make_repo commits as this person.
+        os.environ["GIT_AUTHOR_NAME"] = "test"
+        os.environ["GIT_AUTHOR_EMAIL"] = "test@hestia.local"
+
+    def mine(self, facts, repo):
+        return [r for r in facts["repos"] if Path(r["path"]).resolve() == Path(repo).resolve()]
+
+    def test_leaves_out_other_peoples_commits(self):
+        repo = self.make_repo()
+        env = dict(os.environ, GIT_AUTHOR_NAME="colleague", GIT_AUTHOR_EMAIL="them@elsewhere",
+                   GIT_COMMITTER_NAME="colleague", GIT_COMMITTER_EMAIL="them@elsewhere")
+        (repo / "theirs.txt").write_text("x\n")
+        subprocess.run(["git", "add", "."], cwd=str(repo), env=env)
+        subprocess.run(["git", "commit", "-q", "-m", "their change"], cwd=str(repo), env=env)
+        facts = hestia.gather_why(extra_repos=[str(repo)])
+        self.assertEqual([c["subject"] for c in self.mine(facts, repo)[0]["commits"]], ["first"])
+
+    def test_reads_todays_commits_but_never_the_snapshots(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("not committed\n")
+        hestia.snapshot_repo(repo, "refs/hestia/test", "hestia snapshot")
+        facts = hestia.gather_why(extra_repos=[str(repo)])
+        mine = self.mine(facts, repo)
+        self.assertEqual(len(mine), 1)
+        self.assertEqual([c["subject"] for c in mine[0]["commits"]], ["first"])
+        self.assertEqual(mine[0]["uncommitted_files"], 1)
+
+    def test_carries_the_last_shutdown_note(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "TOMORROW.md").write_text("# Tomorrow\n\n> unblocking the ops import\n")
+        self.assertEqual(hestia.gather_why()["note"], "unblocking the ops import")
+
+
+class TestNew(TempHome):
+    CHANGELOG = (
+        "# Changelog\n\n## 2.0.10\n\n- Added a thing\n  that wraps\n- Fixed another\n\n"
+        "## 2.0.9\n\n- Middle\n\n## 2.0.1\n\n- Old\n"
+    )
+
+    def serve(self, text):
+        path = self.tmp / "CHANGELOG.md"
+        path.write_text(text)
+        os.environ["HESTIA_CHANGELOG_URL"] = path.resolve().as_uri()
+
+    def test_parses_releases_and_wrapped_lines(self):
+        releases = hestia.parse_changelog(self.CHANGELOG)
+        self.assertEqual([v for v, _ in releases], ["2.0.10", "2.0.9", "2.0.1"])
+        self.assertEqual(releases[0][1], ["Added a thing that wraps", "Fixed another"])
+
+    def test_versions_compare_as_numbers(self):
+        self.assertGreater(hestia.version_key("2.0.10"), hestia.version_key("2.0.9"))
+        self.assertEqual(hestia.version_key("2.1.312 (Claude Code)"), (2, 1, 312))
+
+    def test_only_what_changed_since(self):
+        self.serve(self.CHANGELOG)
+        facts = hestia.gather_new(since="2.0.1")
+        self.assertTrue(facts["ok"])
+        self.assertEqual([r["version"] for r in facts["releases"]], ["2.0.10", "2.0.9"])
+        self.assertEqual(hestia.read_json(self.home / "digest.json")["seen"], "2.0.10")
+
+    def test_nothing_when_nothing_changed(self):
+        self.serve(self.CHANGELOG)
+        self.assertEqual(hestia.gather_new(since="2.0.10")["releases"], [])
+
+    def test_offline_is_not_an_error(self):
+        os.environ["HESTIA_CHANGELOG_URL"] = (self.tmp / "missing.md").resolve().as_uri()
+        facts = hestia.gather_new(since="1.0.0")
+        self.assertFalse(facts["ok"])
+        self.assertFalse((self.home / "digest.json").exists(), "a failed check records nothing")
+
+    def test_bounded_however_far_behind(self):
+        many = "# Changelog\n\n" + "".join(
+            "## 1.0.%d\n\n%s\n" % (n, "\n".join("- change %d" % i for i in range(40)))
+            for n in range(50, 0, -1)
+        )
+        self.serve(many)
+        facts = hestia.gather_new(since="0.1.0")
+        total = sum(len(r["changes"]) for r in facts["releases"])
+        self.assertLessEqual(len(facts["releases"]), hestia.NEW_MAX_RELEASES)
+        self.assertLessEqual(total, hestia.NEW_MAX_CHANGES)
+        self.assertGreater(facts["left_out"], 0)
+        # A release cut short by the budget still reports its real size.
+        self.assertTrue(all(r["total_changes"] == 40 for r in facts["releases"]))
 class TestClaudeMdSection(TempHome):
     def setUp(self):
         super().setUp()

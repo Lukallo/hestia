@@ -1,6 +1,8 @@
 # Hestia: keep up with your AI tools without losing the reason you do the work
 
-> Status: plan only. Nothing is built yet.
+> Status: all six commands and the two hooks (`PreToolUse` pause, `SessionStart` handover) are built and tested.
+> Not built yet: the lunch break, the recap on the first prompt after a break, the finish line, catch-up and park.
+> The README's Scope section says why.
 
 ## Why "Hestia"
 
@@ -109,7 +111,7 @@ README.md
 
 Install inside Claude Code:
 ```
-/plugin marketplace add Lukallo/claude-impact-lab-10-26
+/plugin marketplace add Lukallo/hestia
 /plugin install hestia@hestia
 ```
 Without Claude Code: `python plugins/hestia/scripts/hestia.py done`.
