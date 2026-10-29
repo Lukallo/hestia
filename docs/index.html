@@ -39,7 +39,7 @@
   .btn { display: inline-block; padding: 10px 18px; border-radius: 10px; text-decoration: none;
          border: 1px solid var(--coal-edge); background: var(--coal-raised); color: var(--cream); font-weight: 600; }
   .btn.primary { background: var(--ember); border-color: var(--ember); color: var(--coal); }
-  .btn:focus-visible, .tab:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .btn:focus-visible, .stagebar a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
   /* tiles */
   .tile { background: var(--coal); border: 1px solid var(--coal-edge); border-radius: 18px; padding: 24px; }
@@ -56,16 +56,7 @@
   pre .p { color: var(--gold); }
 
   /* day walkthrough */
-  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
-  .tab { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; cursor: pointer;
-         background: var(--coal); border: 1px solid var(--coal-edge); border-radius: 12px;
-         color: var(--ash-light); font: 15px var(--sans); }
-  .tab img { width: 36px; height: 36px; }
-  .tab .t { text-align: left; line-height: 1.2; }
-  .tab .t b { display: block; color: var(--cream); font-family: var(--serif); font-weight: normal; font-size: 17px; }
-  .tab[aria-selected="true"] { border-color: var(--ember); background: var(--coal-raised); }
   .panel { margin-top: 14px; }
-  .panel[hidden] { display: none; }
   .panel-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 8px; }
   .panel-head img { width: 64px; height: 64px; flex: none; }
   .provenance { font-size: 13px; color: var(--ash-light); border-left: 3px solid var(--clay); padding-left: 10px; margin: 6px 0 14px; }
@@ -79,25 +70,67 @@
   ul.plain { padding-left: 20px; margin: 0; }
   ul.plain li { margin-bottom: 8px; }
   footer { padding: 40px 0 60px; text-align: center; font-size: 14px; }
+
+  /* the 3D hearth behind the page */
+  #hearth { position: fixed; inset: 0; width: 100vw; height: 100vh; display: none; z-index: 0; }
+  .gl #hearth { display: block; }
+  .wrap { position: relative; z-index: 1; }
+  .gl .tile { background: rgba(28, 23, 20, .80); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  .hero { min-height: 94vh; display: flex; flex-direction: column; justify-content: center; padding: 40px 0; max-width: 580px; }
+  .hero .kicker { font-size: 13px; text-transform: uppercase; letter-spacing: 2.5px; color: var(--ember); margin: 0 0 6px; }
+  .hero .title { font-size: clamp(68px, 11vw, 136px); letter-spacing: 4px; line-height: 1; margin: 0; }
+  .hero .tagline { font-family: var(--serif); font-style: italic; color: var(--gold); font-size: clamp(20px, 2.6vw, 28px); margin: 8px 0 22px; }
+  .hero .lede { font-size: 19px; margin: 0; }
+  .gl .hero > * { text-shadow: 0 1px 18px rgba(18, 15, 13, .9); }
+  .gl .hero .btn { text-shadow: none; }
+  .hero .scroll-hint { margin-top: 34px; font-size: 14px; color: var(--ash-light); }
+  .static-art { display: none; margin-bottom: 26px; }
+  html:not(.gl) .static-art { display: block; }
+  html:not(.gl) .hero .kicker, html:not(.gl) .hero .title, html:not(.gl) .hero .tagline { display: none; }
+  html:not(.gl) .hero { max-width: none; min-height: 0; }
+
+  .why { padding: 26px; }
+  .stagebar { position: sticky; top: 12px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; margin: 16px 0 0;
+    background: rgba(18, 15, 13, .82); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid var(--coal-edge); border-radius: 14px; width: fit-content; }
+  .stagebar a { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: 10px; text-decoration: none;
+    color: var(--ash-light); font-family: var(--serif); font-size: 16px; border: 1px solid transparent; }
+  .stagebar a img { width: 30px; height: 30px; }
+  .stagebar a[aria-current] { color: var(--cream); border-color: var(--ember); background: var(--coal-raised); }
+  .step { min-height: 92vh; display: flex; align-items: center; scroll-margin-top: 70px; }
+  .step .panel { margin: 0; max-width: 600px; }
+  html:not(.gl) .step { min-height: 0; margin-top: 16px; }
+  @media (max-width: 960px) {
+    .hero, .step .panel { max-width: none; }
+    .gl .tile { background: rgba(28, 23, 20, .88); }
+    .stagebar a span { display: none; }
+    .stagebar a { padding: 4px; }
+  }
 </style>
 </head>
 <body>
+<canvas id="hearth" aria-hidden="true"></canvas>
 <div class="wrap">
 
-<header>
-  <img src="assets/banner.svg" alt="Hestia: keep the fire going, don't burn out. A Claude Code plugin." width="960" height="300">
-  <h1 class="lede" style="font-family:var(--sans);margin-top:26px">
-    <strong>One command that ends the working day in Claude Code.</strong>
-    <span class="cmd">/hestia:done</span> saves whatever you have open, writes tomorrow's first move, and stops your agents until morning.
-  </h1>
+<header class="hero" data-stage="tend">
+  <img class="static-art" src="assets/banner.svg" alt="Hestia: keep the fire going, don't burn out. A Claude Code plugin." width="960" height="300">
+  <p class="kicker">A Claude Code plugin &middot; the shutdown command</p>
+  <h1 class="title">Hestia</h1>
+  <p class="tagline">Keep the fire going. Don't burn out.</p>
+  <p class="lede"><strong>One command that ends the working day in Claude Code.</strong>
+    <span class="cmd">/hestia:done</span> saves whatever you have open, writes tomorrow's first move, and stops your agents until morning.</p>
   <div class="hero-cta">
     <a class="btn primary" href="#install">Install</a>
     <a class="btn" href="#day">See a day, with real output</a>
     <a class="btn" href="https://github.com/Lukallo/hestia">GitHub</a>
   </div>
+  <p class="scroll-hint">Scroll to live through one day. The fire follows.</p>
 </header>
 
-<section class="grid3" style="margin-top:28px" aria-label="What it does">
+<section class="grid3" style="margin-top:28px" aria-label="What it does" data-stage="tend">
   <div class="tile">
     <h3>Your work is saved without being touched</h3>
     <p>Uncommitted changes in every repo you worked in today go into a <code>refs/hestia/&lt;timestamp&gt;</code> snapshot. Your branch, working tree and index stay exactly as they were.</p>
@@ -114,7 +147,8 @@
 
 <img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
 
-<section aria-labelledby="why-h">
+<section aria-labelledby="why-h" data-stage="tend">
+  <div class="tile why">
   <h2 id="why-h">AI removed the natural end of the workday</h2>
   <div class="grid2">
     <div>
@@ -126,24 +160,25 @@
       <p><strong>The brief:</strong> built for the Claude Code Impact Lab, Dublin: <em>a shutdown command</em>. Its one rule is that it has to give time back, not help you do more.</p>
     </div>
   </div>
-  <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="960" height="330" style="margin-top:18px">
+  </div>
 </section>
 
 <img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
 
 <section id="day" aria-labelledby="day-h">
   <h2 id="day-h">A day with Hestia</h2>
-  <p>Pick a stage of the fire. Every terminal block below is real output from the engine, copied from the project README. Nothing is drawn or retyped.</p>
+  <p>Scroll through one day. The fire behind the page follows each stage. Every terminal block below is real output from the engine, copied from the project README. Nothing is drawn or retyped.</p>
 
-  <div class="tabs" role="tablist" aria-label="Stages of the day">
-    <button class="tab" role="tab" id="tab-tend" aria-controls="p-tend" aria-selected="true"><img src="assets/icons/embers.svg" alt=""><span class="t"><b>Tend</b>during the day</span></button>
-    <button class="tab" role="tab" id="tab-rest" aria-controls="p-rest" aria-selected="false" tabindex="-1"><img src="assets/icons/rest.svg" alt=""><span class="t"><b>Rest</b>a midday break</span></button>
-    <button class="tab" role="tab" id="tab-bank" aria-controls="p-bank" aria-selected="false" tabindex="-1"><img src="assets/icons/bank.svg" alt=""><span class="t"><b>Bank</b>end the day</span></button>
-    <button class="tab" role="tab" id="tab-keep" aria-controls="p-keep" aria-selected="false" tabindex="-1"><img src="assets/icons/keep.svg" alt=""><span class="t"><b>Keep</b>overnight</span></button>
-    <button class="tab" role="tab" id="tab-relight" aria-controls="p-relight" aria-selected="false" tabindex="-1"><img src="assets/icons/relight.svg" alt=""><span class="t"><b>Relight</b>next morning</span></button>
-  </div>
+  <nav class="stagebar" aria-label="Stages of the day">
+    <a href="#step-tend" data-for="tend"><img src="assets/icons/tend.svg" alt=""><span>Tend</span></a>
+    <a href="#step-rest" data-for="rest"><img src="assets/icons/rest.svg" alt=""><span>Rest</span></a>
+    <a href="#step-bank" data-for="bank"><img src="assets/icons/bank.svg" alt=""><span>Bank</span></a>
+    <a href="#step-keep" data-for="keep"><img src="assets/icons/keep.svg" alt=""><span>Keep</span></a>
+    <a href="#step-relight" data-for="relight"><img src="assets/icons/relight.svg" alt=""><span>Relight</span></a>
+  </nav>
 
-  <div class="tile panel" role="tabpanel" id="p-tend" aria-labelledby="tab-tend">
+  <div class="step" id="step-tend" data-stage="tend">
+  <div class="tile panel">
     <div class="panel-head"><img src="assets/icons/embers.svg" alt=""><div>
       <h3>Checking in, only when you ask</h3>
       <p><span class="cmd">/hestia:today</span> tells you whether you're paused and how today's load looks. It never shows up on its own.</p>
@@ -154,8 +189,10 @@
   no break longer than 20 minutes today</pre></div>
     <p class="provenance">Captured on a real machine with real session history.</p>
   </div>
+  </div>
 
-  <div class="tile panel" role="tabpanel" id="p-rest" aria-labelledby="tab-rest" hidden>
+  <div class="step" id="step-rest" data-stage="rest">
+  <div class="tile panel">
     <div class="panel-head"><img src="assets/icons/rest.svg" alt=""><div>
       <h3>A break that lifts itself</h3>
       <p><span class="cmd">/hestia:break 45m</span> saves where you are and pauses agents for that long. It writes no list, because the day isn't over. Nothing is killed: a headless run is paused at its next step, so its work is still there when you're back.</p>
@@ -173,8 +210,10 @@
 Before the break: git -C /path/to/demo checkout refs/hestia/2026-10-29-184216 -- .</pre></div>
     <p class="provenance">From one run against a throwaway repo with <code>HESTIA_HOME</code> in a temp folder. The third line of the break output is a real Claude Code window that was open on the machine. Temp paths are shortened to <code>/path/to/demo</code>.</p>
   </div>
+  </div>
 
-  <div class="tile panel" role="tabpanel" id="p-bank" aria-labelledby="tab-bank" hidden>
+  <div class="step" id="step-bank" data-stage="bank">
+  <div class="tile panel">
     <div class="panel-head"><img src="assets/icons/bank.svg" alt=""><div>
       <h3>One command ends the day</h3>
       <p><span class="cmd">/hestia:done</span> answers in three lines and stops. A command that ends the day shouldn't give you more to read.</p>
@@ -209,8 +248,10 @@ Before the break: git -C /path/to/demo checkout refs/hestia/2026-10-29-184216 --
     <p>The snapshot is built through a temporary git index, so nothing is stashed, nothing is committed to your branch, and the test suite checks that <code>.git/index</code> is byte-identical before and after.</p>
     <p class="provenance">From a run against a throwaway repo with <code>HESTIA_HOME</code> in a temp folder and <code>--keep-agents</code>, so nothing was signalled. To keep the run short, the night was a two-minute pause. Temp paths are shortened. The throwaway setup has no session history, so <em>Today</em> is empty.</p>
   </div>
+  </div>
 
-  <div class="tile panel" role="tabpanel" id="p-keep" aria-labelledby="tab-keep" hidden>
+  <div class="step" id="step-keep" data-stage="keep">
+  <div class="tile panel">
     <div class="panel-head"><img src="assets/icons/keep.svg" alt=""><div>
       <h3>Nothing runs overnight</h3>
       <p>Unattended runs got <code>SIGTERM</code> at shutdown, graceful and never <code>SIGKILL</code>. A session you left open isn't killed. The hook stops it at its next step instead:</p>
@@ -225,8 +266,10 @@ Overnight: nothing ran between Thu 29 Oct 19:17 and Thu 29 Oct 19:18.
 Yesterday's list: ~/.hestia/TOMORROW.md</pre></div>
     <p class="provenance">The hook answer is from the same run as <em>Bank</em>. The <code>back</code> output is from a second run: <code>/hestia:done</code>, then <code>/hestia:back</code> a minute later.</p>
   </div>
+  </div>
 
-  <div class="tile panel" role="tabpanel" id="p-relight" aria-labelledby="tab-relight" hidden>
+  <div class="step" id="step-relight" data-stage="relight">
+  <div class="tile panel">
     <div class="panel-head"><img src="assets/icons/relight.svg" alt=""><div>
       <h3>Yesterday's list, handed over once</h3>
       <p>Once the pause runs out, the first prompt you type gets yesterday's list as quiet context, whether you open a new session or come back to the window you left open. Scripted runs never take it, and it is handed over exactly once.</p>
@@ -249,11 +292,13 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
 <pre>Handed over at Thu 29 Oct 19:17.</pre></div>
     <p class="provenance">Same run as <em>Bank</em>. The context block is cut after <em>Start here</em>; the rest is the same <code>TOMORROW.md</code> shown under <em>Bank</em>.</p>
   </div>
+  </div>
+
 </section>
 
 <img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
 
-<section aria-labelledby="cmds-h">
+<section aria-labelledby="cmds-h" data-stage="tend">
   <h2 id="cmds-h">Eight commands, three hooks, nothing else</h2>
   <div class="grid2" style="margin-top:16px">
     <div class="tile cmd-card"><img src="assets/icons/tend.svg" alt=""><div><span class="cmd">/hestia:init</span><p>Once. Four skippable questions, saved to a marked section of <code>~/.claude/CLAUDE.md</code>.</p></div></div>
@@ -269,7 +314,7 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
 
 <img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
 
-<section id="install" aria-labelledby="install-h">
+<section id="install" aria-labelledby="install-h" data-stage="tend">
   <h2 id="install-h">Get started</h2>
   <div class="grid2">
     <div>
@@ -287,14 +332,14 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
       <p>Check every claim yourself. One command builds a throwaway repo and runs the whole flow:</p>
       <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">terminal</span></div>
 <pre><span class="p">python3 plugins/hestia/scripts/hestia.py selftest</span>
-48/48 checks passed</pre></div>
+51/51 checks passed</pre></div>
     </div>
   </div>
 </section>
 
 <img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
 
-<section aria-labelledby="not-h">
+<section aria-labelledby="not-h" data-stage="tend">
   <h2 id="not-h">What it deliberately doesn't do</h2>
   <div class="tile">
     <ul class="plain">
@@ -315,28 +360,7 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
 </footer>
 
 </div>
-<script>
-  // Tabs: click or arrow keys. Switching is instant; only the flame moves on this page.
-  (function () {
-    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
-    function select(tab) {
-      tabs.forEach(function (t) {
-        var on = t === tab;
-        t.setAttribute('aria-selected', on ? 'true' : 'false');
-        t.tabIndex = on ? 0 : -1;
-        document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
-      });
-    }
-    tabs.forEach(function (tab, i) {
-      tab.addEventListener('click', function () { select(tab); });
-      tab.addEventListener('keydown', function (e) {
-        var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-        if (!d) return;
-        var next = tabs[(i + d + tabs.length) % tabs.length];
-        select(next); next.focus(); e.preventDefault();
-      });
-    });
-  })();
-</script>
+<script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js" } }</script>
+<script type="module" src="hearth.js"></script>
 </body>
 </html>
