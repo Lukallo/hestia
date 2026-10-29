@@ -364,11 +364,14 @@ HEADLESS_MARKERS = ("--print", "--output-format", "-p ")
 
 
 def _ps_table():
-    proc = subprocess.run(
-        ["ps", "-eo", "pid=,ppid=,command="],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return []  # no `ps` (Windows): no agents found, so none are signalled
     rows = []
     for line in proc.stdout.decode("utf-8", "replace").splitlines():
         parts = line.strip().split(None, 2)
