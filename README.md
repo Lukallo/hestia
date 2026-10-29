@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `47/47 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `49/49 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -94,7 +94,7 @@ claude plugin uninstall hestia@hestia
 claude plugin marketplace remove hestia
 ```
 
-If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them, see [What it touches](#what-it-touches-and-how-to-undo-it).
+If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them. To delete every one in a repo, run this in it: `git for-each-ref --format='delete %(refname)' refs/hestia | git update-ref --stdin`. See [What it touches](#what-it-touches-and-how-to-undo-it).
 
 </details>
 
@@ -350,7 +350,7 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 
 | Thing | Where | Undo |
 |---|---|---|
-| Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
+| Snapshots | `refs/hestia/*` in each repo. `done` deletes those older than `keep_snapshots_days` (30) | `git update-ref -d refs/hestia/<ts>` |
 | Pause or break state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
 | Handover state | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` hands the list over once more |
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 47 checks, 114 tests
+## Prove it: 49 checks, 125 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -384,6 +384,7 @@ PASS working tree unchanged
 PASS index byte-identical
 PASS uncommitted file is recoverable
 PASS tomorrow's list written
+PASS done prunes snapshots older than the limit
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
@@ -405,6 +406,7 @@ PASS back runs
 PASS old names still work as aliases
 PASS hook is silent after back
 PASS expired pause clears itself
+PASS done after midnight resumes this morning
 PASS break runs
 PASS break saves where you are
 PASS hook pauses agents during a break
@@ -424,19 +426,19 @@ PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-47/47 checks passed
+49/49 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 114 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 125 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 114 tests in 16.280s
+Ran 125 tests in 23.849s
 
 OK
 ```
@@ -568,6 +570,8 @@ Optional, at `~/.hestia/config.json`:
 ```
 
 `working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning. Shutting down after midnight but before `resume_hour` resumes that same morning. The resume time follows your local clock, so a clock change in between doesn't move it.
+
+`keep_snapshots_days` is how many days `done` keeps a snapshot before it deletes it. The default is 30. Set it to 0 to keep every snapshot. Only refs under `refs/hestia/` with a date in their name are deleted, and a break never deletes any.
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 
