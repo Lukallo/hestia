@@ -12,6 +12,12 @@
 
 **One command that ends the working day in Claude Code.** `/hestia:done` banks whatever you have open, writes tomorrow's first move, and stops your agents until morning.
 
+> **The problem: compression burnout.** AI tools fit more work into the same hours. Agents keep running, the waits that used to give you breaks are gone, and the day no longer ends on its own.
+>
+> **Who it's for:** people who build with Claude Code every day, run several sessions or repos at once, and find it hard to stop.
+>
+> **The brief:** a shutdown command, one of the Claude Code Impact Lab's six ideas. Its one rule: give time back, never help you do more.
+
 - **Your work is saved without being touched.** Uncommitted changes in every repo you worked in today go into a `refs/hestia/<timestamp>` snapshot. Your branch, working tree and index stay exactly as they were.
 - **The agents stop when you do.** Unattended Claude Code runs get `SIGTERM`. Open sessions are paused by a hook until the next working morning.
 - **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, nothing always on screen.
@@ -23,26 +29,33 @@
 
 ## Get started
 
-In Claude Code:
+Needs Claude Code, `git` and `python3`. Nothing else: the engine is standard library only.
+
+**1. Install**, in Claude Code:
 
 ```text
 /plugin marketplace add Lukallo/hestia
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`. No other dependencies: the engine is standard library only.
-
-Once, to set up (about a minute; every question is skippable and has a default):
-
-```text
-/hestia:init
-```
-
-At the end of the day, type:
+**2. At the end of the day**, type:
 
 ```text
 /hestia:done
 ```
+
+That's all you need. The first session next morning picks up where you left off.
+
+**Optional, once:** `/hestia:init` takes about a minute. Every question is skippable and has a default. It tells Hestia your working days and hours, and what your work is for.
+
+**Want to check it works before installing?** No Claude Code needed:
+
+```text
+git clone https://github.com/Lukallo/hestia && cd hestia
+python3 plugins/hestia/scripts/hestia.py selftest
+```
+
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `32/32 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -62,6 +75,27 @@ That's it. You get:
 <each repo you touched today>
 └── refs/hestia/<timestamp>   a snapshot of your uncommitted work
 ```
+
+<details>
+<summary><b>Update or remove it</b></summary>
+
+From a terminal. To update:
+
+```text
+claude plugin marketplace update hestia
+claude plugin update hestia@hestia
+```
+
+To remove it completely:
+
+```text
+claude plugin uninstall hestia@hestia
+claude plugin marketplace remove hestia
+```
+
+If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them, see [What it touches](#what-it-touches-and-how-to-undo-it).
+
+</details>
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -364,6 +398,17 @@ The time it saves is the stashing, the "where was I?" note, the morning re-orien
 ## Scope
 
 All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
+
+## If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| Every tool call is denied with "Clocked out until..." | You ran `/hestia:done`. Run `/hestia:back`, or delete `~/.hestia/pause.json` |
+| Denied with "On a break until..." | A break. It lifts itself at that time, or `/hestia:back` ends it now |
+| The morning list didn't appear | The session was resumed with `--continue`, the pause hadn't ended yet, or the list was already handed over. Delete `~/.hestia/handover.json` to get it again |
+| `/hestia:why` shows no commits for a repo you committed to today | The commits were made under a different git identity from the one that repo uses now |
+| `/hestia:new` always says nothing changed | `~/.hestia/digest.json` already has the newest version. Delete it to see the changes again |
+| Commands fail with `python3: command not found` | Install Python 3. On Windows the command is usually `python`, see the limitations below |
 
 ## Honest limitations
 
