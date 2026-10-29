@@ -6,6 +6,7 @@ Linux and macOS have no real copy of.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1073,6 +1074,26 @@ class TestDashboard(TempHome):
         page = self.render()
         self.assertIn("refs/hestia/2026-10-29-180000", page)
         self.assertIn("checkout refs/hestia/2026-10-29-180000 -- .", page)
+
+    def on_stage(self, page):
+        self.assertEqual(page.count('class="s on"'), 1, "exactly one stage is lit")
+        return re.search(r'<div class="s on">.*?<b>(\w+)</b>', page).group(1)
+
+    def test_the_highlighted_stage_follows_the_pause(self):
+        self.assertEqual(self.on_stage(self.render()), "Tend")
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "break",
+            "until": (datetime.now().astimezone() + timedelta(minutes=30)).isoformat(),
+        })
+        self.assertEqual(self.on_stage(self.render()), "Rest")
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "done",
+            "until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat(),
+        })
+        page = self.render()
+        self.assertEqual(self.on_stage(page), "Keep")
+        self.assertIn("/hestia:back", page)
+        self.assertNotIn("<script", page, "the page stays static")
 
     def test_writes_nothing_but_the_page(self):
         self.render()

@@ -119,7 +119,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 47 checks, 109 tests</b></summary>
+<summary><b>Real output: 47 checks, 110 tests</b></summary>
 
 ```text
 PASS done runs
@@ -176,7 +176,7 @@ PASS dream restore puts memory back exactly
 The unittest result (the commands under test print their own output in between, left out here):
 
 ```text
-Ran 109 tests in 48.658s
+Ran 110 tests in 33.009s
 
 OK (skipped=6)
 ```
