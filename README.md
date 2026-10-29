@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="Hestia: keep the fire going, don't burn out. A Claude Code plugin: /hestia:done at night, /hestia:back in the morning." width="900">
+  <img src="assets/banner.svg" alt="Hestia: keep the fire going, don't burn out. A Claude Code plugin." width="900">
 </p>
 
 <h1 align="center">Hestia</h1>
@@ -19,7 +19,7 @@ It also tidies Claude's [auto memory](https://code.claude.com/docs/en/memory) wh
 People who build with Claude Code every day and find it hard to stop. AI removed the natural end of the workday: each task finishes faster, agents keep running, and the day thins out instead of ending (compression burnout). Hestia answers the Claude Code Impact Lab brief, **a shutdown command**, by making stopping safe: picking back up is guaranteed.
 
 <p align="center">
-  <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with /hestia:back, yesterday's list ready." width="900">
+  <img src="assets/cycle.svg" alt="The day as a fire: start the day with /hestia:back and tend it, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
 </p>
 <p align="center"><em>Tend the fire by day, bank it with <code>/hestia:done</code>, keep it overnight, relight it in the morning.</em></p>
 
