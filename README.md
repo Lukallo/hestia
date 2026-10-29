@@ -51,16 +51,18 @@ library only.
 
 | Command | What happens |
 |---|---|
-| `/hestia:shutdown [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
-| `/hestia:resume` | Lifts the pause early, and reminds you of the one thing you were mid-way through |
-| `/hestia:status` | Whether you're paused, and today's load — only ever when you ask |
+| `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
+| `/hestia:back` | Lifts the pause early, and reminds you of the one thing you were mid-way through |
+| `/hestia:today` | Whether you're paused, and today's load — only ever when you ask |
 
 Plus two things that happen on their own, and nothing else:
 
 | | What happens |
 |---|---|
-| *at shutdown* | Unattended agents are sent `SIGTERM`. Interactive sessions are left alone and reported — a `PreToolUse` hook stops them at their next step instead of killing a window you're sitting in front of |
+| *at `/hestia:done`* | Unattended agents are sent `SIGTERM`. Interactive sessions are left alone and reported — a `PreToolUse` hook stops them at their next step instead of killing a window you're sitting in front of |
 | *next morning* | A `SessionStart` hook hands yesterday's list to the first session after the pause, **once**, then goes quiet |
+
+The CLI still answers to the older `shutdown`, `resume` and `status` as aliases.
 
 That second one is the whole trick. Stopping is only possible if picking back up
 is guaranteed, so the context you left with is given back automatically — and
@@ -86,7 +88,7 @@ live session.
 **Ending the day:**
 
 ```
-$ /hestia:shutdown unblocking the CSV import for the ops team
+$ /hestia:done unblocking the CSV import for the ops team
 
 Clocked out until Fri 30 Oct 08:00.
   saved 2 files in demo -> refs/hestia/2026-10-29-180609
@@ -120,7 +122,7 @@ Three lines, and it stops. That's the whole answer.
 The throwaway repo has no session history, so `Today` is empty here. On a real
 machine it fills in with the same numbers `status` reports, below.
 
-**Checking in, when you ask** (`/hestia:status`):
+**Checking in, when you ask** (`/hestia:today`):
 
 ```
 Working.
@@ -131,7 +133,7 @@ Working.
 **The proof** (`python3 plugins/hestia/scripts/hestia.py selftest`):
 
 ```
-PASS shutdown runs
+PASS done runs
 PASS snapshot saved the work
 PASS snapshot reported untouched
 PASS branch unchanged
@@ -141,16 +143,17 @@ PASS uncommitted file is recoverable
 PASS tomorrow's list written
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
-PASS hook always allows resume
+PASS hook always allows back
 PASS no handover while still paused
-PASS resume runs
+PASS back runs
+PASS old names still work as aliases
 PASS morning gets yesterday's list
 PASS handover carries the note
 PASS handover happens only once
-PASS hook is silent after resume
+PASS hook is silent after back
 PASS expired pause clears itself
 
-18/18 checks passed
+19/19 checks passed
 ```
 
 And 22 unit tests against real git repositories:
@@ -188,7 +191,7 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Thing | Where | Undo |
 |---|---|---|
 | Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
-| Pause state | `~/.hestia/pause.json` | `/hestia:resume`, or delete the file |
+| Pause state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
 | Config | `~/.hestia/config.json` (optional) | delete it |
@@ -207,7 +210,7 @@ python3 plugins/hestia/scripts/hestia.py selftest
 
 It verifies that the snapshot recovers an uncommitted file, that the branch,
 working tree and index are unchanged, that the hook blocks tool use while
-paused, that it *never* blocks `resume`, and that an expired pause lets you back
+paused, that it *never* blocks `back`, and that an expired pause lets you back
 in on its own.
 
 The unit tests run against real git repositories in temp directories — nothing
@@ -223,15 +226,22 @@ The brief's one rule is that it has to give time back, not help you do more. So:
 
 - **No notifications, reminders or nudges.** Nothing ever interrupts you. Every
   command runs because you typed it.
-- **No dashboard.** The workload numbers live inside `/hestia:status` and are
+- **No dashboard.** The workload numbers live inside `/hestia:today` and are
   shown only when asked. A thing you have to check is a thing that costs
   attention.
 - **No streaks, scores or goals.** Measuring rest turns rest into work.
-- **No summary at shutdown.** `/hestia:shutdown` answers in three lines and
+- **No summary at shutdown.** `/hestia:done` answers in three lines and
   stops. A command that ends the day shouldn't give you more to read.
 
 The time it saves is the stashing, the "where was I?" note, the morning
 re-orientation, and the agents that would otherwise have run all night.
+
+## Scope
+
+[PLAN.md](PLAN.md) describes six commands. Three are built — the ones that make
+the day end and start again. `/hestia:break`, `/hestia:why` and `/hestia:new`
+are designed but not implemented, and are left out rather than half-built: one
+flow that works end to end is worth more than six that nearly do.
 
 ## Honest limitations
 
@@ -244,7 +254,7 @@ re-orientation, and the agents that would otherwise have run all night.
   existing session with `--continue` won't re-deliver the list. That's
   deliberate: it's already in that session's context.
 - While paused, Claude won't act on anything — including for you. That's
-  deliberate, but it means `/hestia:resume` is the only way back in tonight. The
+  deliberate, but it means `/hestia:back` is the only way back in tonight. The
   hook allowlists that command explicitly so you can never lock yourself out.
 - Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`.
   If you worked somewhere Claude Code never saw, add it to `repos` in the
@@ -261,9 +271,9 @@ re-orientation, and the agents that would otherwise have run all night.
 The engine is a plain CLI and works on its own:
 
 ```
-python3 plugins/hestia/scripts/hestia.py shutdown --note "shipped the import fix"
-python3 plugins/hestia/scripts/hestia.py status
-python3 plugins/hestia/scripts/hestia.py resume
+python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix"
+python3 plugins/hestia/scripts/hestia.py today
+python3 plugins/hestia/scripts/hestia.py back
 ```
 
 ## Config
