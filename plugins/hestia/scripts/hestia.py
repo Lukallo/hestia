@@ -50,6 +50,8 @@ DEFAULT_WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday-Friday
 DEFAULT_BREAK_MINUTES = 45
 # A break longer than this is the end of the day, which is what `done` is for.
 MAX_BREAK_MINUTES = 4 * 60
+# `done` deletes refs/hestia snapshots older than this. 0 or less keeps them all.
+DEFAULT_KEEP_SNAPSHOTS_DAYS = 30
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
 # `new` hands Claude a bounded slice of the changelog, never the whole history.
@@ -96,6 +98,7 @@ def load_config():
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
         "screen": None,  # set by init; None means guess with has_screen()
+        "keep_snapshots_days": DEFAULT_KEEP_SNAPSHOTS_DAYS,
     }
     path = hestia_home() / "config.json"
     if path.exists():
@@ -749,6 +752,15 @@ def cmd_shutdown(args):
     snapshots = [
         snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
     ]
+    # Old snapshots go, so refs/hestia doesn't grow forever. Clean repos are
+    # pruned too. The snapshots just taken never are.
+    just_taken = set(s["ref"] for s in snapshots if s["ref"])
+    just_taken.add("refs/hestia/%s" % stamp)
+    pruned = [
+        {"repo": str(repo), "ref": ref}
+        for repo in repos
+        for ref in prune_snapshots(repo, cfg.get("keep_snapshots_days"), now, keep=just_taken)
+    ]
 
     if args.keep_agents:
         stopped, still_open = [], running_agents()
@@ -788,6 +800,7 @@ def cmd_shutdown(args):
         },
         "agents_stopped": stopped,
         "agents_still_open": still_open,
+        "pruned": pruned,
         "errors": [s["error"] for s in snapshots if s["error"]],
         "integrity_ok": all(s["untouched"] for s in snapshots),
     }
@@ -1071,6 +1084,57 @@ def list_snapshots(repos, limit=5):
                 found.append({"repo": str(repo), "ref": ref, "at": parse_ts(when)})
     found.sort(key=lambda s: s["at"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return found
+
+
+SNAPSHOT_NAME = re.compile(r"^refs/hestia/(\d{4}-\d{2}-\d{2}-\d{6})$")
+
+
+def snapshot_taken_at(ref):
+    """When a refs/hestia/<YYYY-MM-DD-HHMMSS> snapshot was taken, as local time.
+
+    None for any other name, so a ref Hestia didn't name is never pruned.
+    """
+    match = SNAPSHOT_NAME.match(ref)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d-%H%M%S").astimezone()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def prune_snapshots(repo, keep_days, now, keep=()):
+    """Delete refs/hestia snapshots more than keep_days old. Returns their names.
+
+    The age comes from the timestamp in the ref's name. A name that doesn't
+    parse, or a ref in `keep`, is left alone. keep_days of 0 or less, or one
+    that isn't a whole number, keeps everything. Only refs change: the working
+    tree, the index and HEAD are never touched.
+    """
+    if isinstance(keep_days, bool):
+        return []
+    try:
+        days = int(keep_days)
+        if days <= 0:
+            return []
+        cutoff = now - timedelta(days=days)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    listed = git(repo, ["for-each-ref", "refs/hestia", "--format=%(refname) %(objectname)"])
+    if not listed.ok:
+        return []
+    pruned = []
+    for line in listed.out.splitlines():
+        ref, _, sha = line.partition(" ")
+        if not ref or ref in keep:
+            continue
+        taken = snapshot_taken_at(ref)
+        if taken is None or taken >= cutoff:
+            continue
+        # Naming the old value leaves alone a ref that moved since it was listed.
+        if git(repo, ["update-ref", "-d", ref, sha]).ok:
+            pruned.append(ref)
+    return pruned
 
 
 def _timeline_svg(prompts, now, paused):
@@ -2648,6 +2712,11 @@ def cmd_selftest(args):
         (repo / "README.md").write_text("committed\n")
         rungit(["add", "."])
         rungit(["commit", "-q", "-m", "first"])
+        # A snapshot from two months ago, past the 30-day limit.
+        old_snapshot = "refs/hestia/%s" % (
+            datetime.now().astimezone() - timedelta(days=60)
+        ).strftime("%Y-%m-%d-%H%M%S")
+        rungit(["update-ref", old_snapshot, "HEAD"])
 
         # Unsaved work, of both kinds.
         (repo / "README.md").write_text("committed and then edited\n")
@@ -2680,6 +2749,11 @@ def cmd_selftest(args):
         check("uncommitted file is recoverable", show.strip() == "never committed")
 
         check("tomorrow's list written", Path(result["tomorrow"]).exists())
+
+        left = rungit(["for-each-ref", "--format=%(refname)", "refs/hestia"]).stdout.decode().split()
+        check("done prunes snapshots older than the limit",
+              old_snapshot not in left and ref in left
+              and [p["ref"] for p in result.get("pruned", [])] == [old_snapshot])
 
         # The pause blocks agent tool use...
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)

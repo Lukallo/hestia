@@ -575,6 +575,141 @@ class TestShutdownEndToEnd(TempHome):
         self.assertIn("refs/hestia/", text)
 
 
+class TestPruneSnapshots(TempHome):
+    """done deletes refs/hestia snapshots older than keep_snapshots_days."""
+
+    def snapshot_ref(self, days_ago):
+        when = datetime.now().astimezone() - timedelta(days=days_ago)
+        return "refs/hestia/%s" % when.strftime("%Y-%m-%d-%H%M%S")
+
+    def add_ref(self, repo, ref):
+        self.assertTrue(hestia.git(repo, ["update-ref", ref, "HEAD"]).ok, ref)
+
+    def refs(self, repo):
+        out = hestia.git(repo, ["for-each-ref", "--format=%(refname)", "refs/hestia"]).out
+        return set(out.split())
+
+    def run_in(self, repo, command, **args):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(str(repo))
+        try:
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(command(hestia.argparse.Namespace(**args)), 0)
+        finally:
+            os.chdir(cwd)
+        return json.loads(out.getvalue())
+
+    def done(self, repo, config=None):
+        if config is not None:
+            hestia.write_json(self.home / "config.json", config)
+        return self.run_in(
+            repo, hestia.cmd_shutdown, note="", until="", json=True, next="",
+            keep_agents=True,  # never touch real processes from a test
+            stop_all=False,
+        )
+
+    def test_the_default_limit_is_thirty_days(self):
+        self.assertEqual(hestia.load_config()["keep_snapshots_days"], 30)
+
+    def test_deletes_old_keeps_recent_and_todays(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        old, recent = self.snapshot_ref(45), self.snapshot_ref(5)
+        self.add_ref(repo, old)
+        self.add_ref(repo, recent)
+
+        result = self.done(repo)
+
+        today = result["snapshots"][0]["ref"]
+        self.assertTrue(today)
+        self.assertEqual(self.refs(repo), {recent, today})
+        self.assertEqual(result["pruned"], [{"repo": str(hestia.git_toplevel(repo)), "ref": old}])
+
+    def test_clean_repos_are_pruned_too(self):
+        repo = self.make_repo()
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        result = self.done(repo)
+        self.assertEqual(result["saved"], 0)
+        self.assertEqual(self.refs(repo), set())
+
+    def test_zero_or_less_keeps_everything(self):
+        for keep_days in (0, -1, "never", None, True):
+            repo = self.make_repo("repo-%s" % keep_days)
+            old = self.snapshot_ref(400)
+            self.add_ref(repo, old)
+            result = self.done(repo, config={"keep_snapshots_days": keep_days})
+            self.assertIn(old, self.refs(repo), keep_days)
+            self.assertEqual(result["pruned"], [], keep_days)
+            hestia.clear_pause()
+
+    def test_names_that_are_not_a_timestamp_are_kept(self):
+        repo = self.make_repo()
+        names = [
+            "refs/hestia/keep-me",
+            "refs/hestia/2020-13-45-000000",  # the right shape, not a real date
+            "refs/hestia/2020-01-01-000000-extra",
+            "refs/hestia/old/2020-01-01-000000",
+        ]
+        for name in names:
+            self.add_ref(repo, name)
+        self.done(repo, config={"keep_snapshots_days": 1})
+        self.assertEqual(self.refs(repo), set(names))
+
+    def test_never_deletes_the_snapshot_just_taken(self):
+        repo = self.make_repo()
+        now = datetime.now().astimezone()
+        ref = "refs/hestia/%s" % now.strftime("%Y-%m-%d-%H%M%S")
+        self.add_ref(repo, ref)
+        later = now + timedelta(days=10)
+        self.assertEqual(hestia.prune_snapshots(repo, 1, later, keep={ref}), [])
+        self.assertIn(ref, self.refs(repo))
+        self.assertEqual(hestia.prune_snapshots(repo, 1, later), [ref])
+
+    def test_break_never_prunes(self):
+        repo = self.make_repo()
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        # break never signals anything unless stop_agents is set.
+        self.run_in(repo, hestia.cmd_break, length="30m", json=True, stop_agents=False)
+        self.assertIn(old, self.refs(repo))
+
+    def test_pruning_leaves_the_repo_byte_identical(self):
+        repo = self.make_repo()
+        (repo / "a.txt").write_text("one, edited\n")
+        (repo / "staged.txt").write_text("staged\n")
+        hestia.git(repo, ["add", "staged.txt"])
+        (repo / "new.txt").write_text("never committed\n")
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        hestia.git(repo, ["pack-refs", "--all"])  # deleting a packed ref rewrites packed-refs
+
+        def state():
+            # status first: it may refresh the index, which pruning never does.
+            status = hestia.git(repo, ["status", "--porcelain"]).out
+            files = {
+                str(p.relative_to(repo)): p.read_bytes()
+                for p in repo.rglob("*") if p.is_file() and ".git" not in p.parts
+            }
+            git_dir = repo / ".git"
+            return (status, files, (git_dir / "index").read_bytes(),
+                    (git_dir / "HEAD").read_bytes(), hestia.git(repo, ["rev-parse", "HEAD"]).out)
+
+        before = state()
+        self.assertEqual(hestia.prune_snapshots(repo, 30, datetime.now().astimezone()), [old])
+        self.assertEqual(state(), before)
+
+        self.add_ref(repo, old)
+        result = self.done(repo)
+        self.assertEqual([p["ref"] for p in result["pruned"]], [old])
+        self.assertTrue(result["integrity_ok"])
+        self.assertEqual(state(), before)
+
+
 class TestBreak(TempHome):
     """A break is the same pause with kind=break: no list, lifts itself."""
 
