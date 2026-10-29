@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `49/49 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `50/50 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 49 checks, 125 tests
+## Prove it: 50 checks, 136 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -383,6 +383,7 @@ PASS branch unchanged
 PASS working tree unchanged
 PASS index byte-identical
 PASS uncommitted file is recoverable
+PASS snapshot skips large untracked files
 PASS tomorrow's list written
 PASS done prunes snapshots older than the limit
 PASS hook blocks tool use while paused
@@ -426,19 +427,19 @@ PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-49/49 checks passed
+50/50 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 125 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 136 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 125 tests in 23.849s
+Ran 136 tests in 25.263s
 
 OK
 ```
@@ -521,6 +522,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
 - The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
+- Untracked files over `snapshot_max_mb` (50 MB by default) are not saved. `TOMORROW.md` names them under the repo, but the snapshot can't restore them. The limit is per file, so many small new files can still add up.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
 - `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
@@ -572,6 +574,8 @@ Optional, at `~/.hestia/config.json`:
 `working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning. Shutting down after midnight but before `resume_hour` resumes that same morning. The resume time follows your local clock, so a clock change in between doesn't move it.
 
 `keep_snapshots_days` is how many days `done` keeps a snapshot before it deletes it. The default is 30. Set it to 0 to keep every snapshot. Only refs under `refs/hestia/` with a date in their name are deleted, and a break never deletes any.
+
+`snapshot_max_mb`: untracked files bigger than this many MB are left out of snapshots, so each `done` and `break` doesn't copy them into `.git/objects`. The default is 50. Set it to 0 to save everything. Tracked files are always saved, whatever their size.
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 
