@@ -119,7 +119,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 47 checks, 110 tests</b></summary>
+<summary><b>Real output: 51 checks, 140 tests</b></summary>
 
 ```text
 PASS done runs
@@ -129,7 +129,9 @@ PASS branch unchanged
 PASS working tree unchanged
 PASS index byte-identical
 PASS uncommitted file is recoverable
+PASS snapshot skips large untracked files
 PASS tomorrow's list written
+PASS done prunes snapshots older than the limit
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
@@ -151,6 +153,7 @@ PASS back runs
 PASS old names still work as aliases
 PASS hook is silent after back
 PASS expired pause clears itself
+PASS done after midnight resumes this morning
 PASS break runs
 PASS break saves where you are
 PASS hook pauses agents during a break
@@ -165,23 +168,24 @@ PASS new degrades cleanly offline
 PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
+PASS CLAUDE.md section stays inside its budget
 PASS init remove restores CLAUDE.md exactly
 PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-47/47 checks passed
+51/51 checks passed
 ```
 
 The unittest result (the commands under test print their own output in between, left out here):
 
 ```text
-Ran 110 tests in 33.009s
+Ran 140 tests in 56.342s
 
-OK (skipped=6)
+OK (skipped=7)
 ```
 
-That run was on Windows, where 6 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, and 2 dashboard tests use a shell-script stand-in browser. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
+That run was on Windows, where 7 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, 2 dashboard tests use a shell-script stand-in browser, and 1 needs `time.tzset`, which is POSIX only. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
 
 The selftest never touches real processes and reads a local changelog, so it runs offline. The tests use real git repos in temp folders; nothing is mocked.
 
