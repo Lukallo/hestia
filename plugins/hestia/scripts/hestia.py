@@ -21,11 +21,14 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 
 Environment overrides (used by the tests and selftest):
     HESTIA_HOME           state directory, default ~/.hestia
-    HESTIA_LOG_DIR        Claude Code project logs, default ~/.claude/projects
-    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
+    HESTIA_LOG_DIR        Claude Code project logs, default <claude dir>/projects
+    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default <claude dir>
     HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
+                          (<claude dir>/.claude.json when CLAUDE_CONFIG_DIR is set)
+
+<claude dir> is $CLAUDE_CONFIG_DIR when Claude Code was started with it, else ~/.claude.
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
-    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
+    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default <claude dir>/projects
 """
 
 import argparse
@@ -86,8 +89,21 @@ def hestia_home():
     return Path(os.environ.get("HESTIA_HOME") or (Path.home() / ".hestia"))
 
 
+def claude_config_dir():
+    """Where Claude Code keeps its own files: CLAUDE_CONFIG_DIR, or ~/.claude.
+
+    People who run more than one Claude Code account set CLAUDE_CONFIG_DIR.
+    Claude Code then keeps the session logs, CLAUDE.md and .claude.json in
+    that folder, and passes the variable on to hooks.
+    """
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured).expanduser() if configured else None
+
+
 def log_dir():
-    return Path(os.environ.get("HESTIA_LOG_DIR") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_LOG_DIR"):
+        return Path(os.environ["HESTIA_LOG_DIR"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def load_config():
@@ -1010,30 +1026,58 @@ def cmd_status(args):
 DASHBOARD_CSS = """
 :root { color-scheme: dark; }
 * { box-sizing: border-box; }
-body { margin: 0; background: #1C1714; color: #A89E97;
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 960px; margin: 0 auto; padding: 40px 24px 56px; }
-h1, h2 { font-family: Georgia, "Times New Roman", serif; color: #F6EDE3; font-weight: normal; }
-h1 { font-size: 30px; margin: 0 0 4px; }
-h2 { font-size: 19px; margin: 0 0 14px; }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+html { background: #120F0D; }
+body { margin: 0; color: #A89E97;
+  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 32px 20px 56px; }
+h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; color: #F6EDE3; font-weight: normal; }
+h1 { font-size: 40px; letter-spacing: 2px; margin: 0; line-height: 1.1; }
+h2 { font-size: 20px; margin: 0 0 14px; }
+code, pre { font-family: ui-monospace, "SF Mono", Consolas, Menlo, monospace; font-size: 13px; }
 code { color: #F4B740; }
-.lede { margin: 0 0 28px; }
-.tile { background: #2A211C; border: 1px solid #3A2E27; border-radius: 14px; padding: 20px 22px; margin-bottom: 18px; }
-.status { font-family: Georgia, serif; font-size: 22px; color: #F6EDE3; margin: 0; }
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px; margin: 0; }
+small { font-size: 13px; color: #A89E97; }
+.banner { position: relative; display: flex; align-items: center; gap: 22px; padding: 24px 26px 34px;
+  border-radius: 22px; background: radial-gradient(circle at 70px 60px, rgba(232,116,59,.26), rgba(232,116,59,0) 300px), #1C1714;
+  border: 1px solid #3A2E27; margin-bottom: 18px; overflow: hidden; }
+.banner .tag { font-family: Georgia, serif; font-style: italic; color: #F4B740; font-size: 17px; margin: 4px 0 0; }
+.banner .date { margin: 2px 0 0; font-size: 14px; }
+.banner .key { position: absolute; left: 22px; bottom: 10px; width: calc(100% - 44px); height: 14px; }
+@keyframes flicker { 0%, 100% { transform: scale(1, 1); } 35% { transform: scale(.97, 1.05); } 70% { transform: scale(1.02, .97); } }
+.flame { transform-origin: 32px 50px; animation: flicker 2.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .flame { animation: none; } }
+.tile { background: #1C1714; border: 1px solid #3A2E27; border-radius: 18px; padding: 20px 22px; margin-bottom: 18px; }
+.stage { display: flex; gap: 20px; align-items: center; }
+.stage svg { flex: none; }
+.stage .label { font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; color: #E8743B; margin: 0; }
+.status { font-family: Georgia, serif; font-size: 26px; color: #F6EDE3; margin: 2px 0 4px; line-height: 1.25; }
+.status small { display: block; font-family: -apple-system, "Segoe UI", sans-serif; font-size: 15px; margin-top: 4px; }
+.hint { margin: 6px 0 0; }
+.cycle { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid #3A2E27; }
+.cycle .s { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 5px; border-radius: 12px;
+  border: 1px solid #3A2E27; opacity: .45; font-size: 13px; }
+.cycle .s b { display: block; font-family: Georgia, serif; font-weight: normal; color: #F6EDE3; font-size: 15px; line-height: 1.2; }
+.cycle .s.on { opacity: 1; border-color: #E8743B; background: #2A211C; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin: 0; }
+.facts div { background: #2A211C; border-radius: 12px; padding: 12px 14px; }
 .facts dt { font-size: 13px; }
-.facts dd { margin: 2px 0 0; font-size: 22px; color: #F6EDE3; font-variant-numeric: tabular-nums; }
-.facts dd small { font-size: 13px; color: #A89E97; }
+.facts dd { margin: 2px 0 0; font-family: Georgia, serif; font-size: 26px; color: #F6EDE3; font-variant-numeric: tabular-nums; }
+.facts dd small { font-family: -apple-system, "Segoe UI", sans-serif; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .banner { padding: 18px 18px 30px; } h1 { font-size: 32px; } }
 .grid .tile { margin: 0; }
 ul.plain { list-style: none; margin: 0; padding: 0; }
-ul.plain li { padding: 7px 0; border-top: 1px solid #3A2E27; display: flex; justify-content: space-between; gap: 12px; }
-ul.plain li:first-child { border-top: 0; }
+ul.plain li { padding: 9px 0; border-top: 1px solid #3A2E27; display: flex; justify-content: space-between; gap: 12px; }
+ul.plain li:first-child { border-top: 0; padding-top: 0; }
+ul.plain li > div { min-width: 0; }
 ul.plain .n { color: #F6EDE3; font-variant-numeric: tabular-nums; }
-.snap { display: block; margin-top: 2px; word-break: break-all; }
-pre { white-space: pre-wrap; margin: 0; color: #A89E97; }
+.snap { display: block; margin-top: 6px; padding: 7px 10px; background: #0E0B09; border: 1px solid #3A2E27;
+  border-radius: 8px; word-break: break-all; }
+.term { background: #0E0B09; border: 1px solid #3A2E27; border-radius: 12px; overflow: hidden; }
+.term-bar { display: flex; gap: 7px; align-items: center; padding: 7px 12px; background: #2A211C;
+  border-bottom: 1px solid #3A2E27; font: 12px ui-monospace, Consolas, monospace; }
+.term-bar i { width: 9px; height: 9px; border-radius: 50%; background: #3A2E27; }
+.term-bar span { margin-left: 4px; }
+pre { white-space: pre-wrap; margin: 0; padding: 14px 16px; color: #F6EDE3; line-height: 1.55; }
 .empty { margin: 0; }
 svg text { fill: #A89E97; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .tick { stroke: #E8743B; stroke-width: 2; stroke-linecap: round; }
@@ -1046,8 +1090,67 @@ summary { cursor: pointer; font-size: 13px; }
 table { border-collapse: collapse; margin-top: 10px; font-size: 13px; width: 100%; }
 th, td { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid #3A2E27; }
 th { color: #F6EDE3; font-weight: normal; }
-footer { margin-top: 28px; font-size: 13px; color: #6B615B; }
+footer { margin-top: 28px; font-size: 13px; color: #6B615B; text-align: center; }
 """
+
+# The brand's one flame shape (assets/icons/tend.svg) and the stage icons it
+# appears in, inlined so the page needs nothing from the plugin folder.
+FLAME = (
+    '<path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5'
+    'C29 25 29 17 32 10z" fill="%s"/>'
+)
+FLAME_CORE = (
+    '<path d="M32 31c2 4.5 6.5 6.5 6.5 12a6.5 6.5 0 0 1-13 0c0-3.5 2-6 3.5-8 .8 2 1.8 3 3 3.2'
+    '-.2-2.5-.2-4.7 0-7.2z" fill="#F4B740"/>'
+)
+STAGE_ICONS = {
+    "tend": '<ellipse cx="32" cy="52" rx="16" ry="3" fill="#E8743B" opacity=".25"/>'
+            + FLAME % "#E8743B" + FLAME_CORE,
+    "rest": '<circle cx="32" cy="15" r="6" fill="#F4B740"/>'
+            '<g stroke="#F4B740" stroke-width="2" stroke-linecap="round" opacity=".7">'
+            '<path d="M20 15h-4"/><path d="M48 15h-4"/><path d="M23.5 6.5l2.5 2.5"/><path d="M40.5 6.5l-2.5 2.5"/></g>'
+            '<ellipse cx="32" cy="50" rx="13" ry="3" fill="#E8743B" opacity=".3"/>'
+            '<g transform="translate(17.6 23.5) scale(.55)">' + FLAME % "#E8743B" + FLAME_CORE + "</g>"
+            '<rect x="15" y="52" width="34" height="3" rx="1.5" fill="#6B615B"/>',
+    "bank": '<ellipse cx="32" cy="47" rx="19" ry="4" fill="#E8743B" opacity=".35"/>'
+            '<path d="M11 47c1-6 5-9.5 9.5-9.5 1.5-5 6-8.5 11.5-8.5s10 3.5 11.5 8.5c4.5 0 8.5 3.5 9.5 9.5z" fill="#6B615B"/>'
+            '<circle cx="21" cy="46" r="2.4" fill="#E8743B"/><circle cx="32" cy="47" r="2.8" fill="#F4B740"/>'
+            '<circle cx="43" cy="46" r="2.4" fill="#E8743B"/>'
+            '<path d="M32 25c-3.5-3 3.5-6 0-10" stroke="#8A817C" stroke-width="2" fill="none" stroke-linecap="round"/>',
+    "keep": '<circle cx="42" cy="19" r="8" fill="#F4B740"/><circle cx="46" cy="16" r="7" fill="#1C1714"/>'
+            '<circle cx="19" cy="14" r="1.3" fill="#F6EDE3" opacity=".7"/>'
+            '<circle cx="27" cy="22" r="1" fill="#F6EDE3" opacity=".5"/>'
+            '<ellipse cx="32" cy="50" rx="10" ry="2.5" fill="#E8743B" opacity=".3"/>'
+            '<g transform="translate(18 25) scale(.56)">' + FLAME % "#C2502A" + "</g>"
+            '<rect x="15" y="52" width="34" height="3" rx="1.5" fill="#6B615B"/>',
+    "relight": '<path d="M18 46a14 14 0 0 1 28 0z" fill="#F4B740"/>'
+               '<g stroke="#F4B740" stroke-width="2.5" stroke-linecap="round"><path d="M32 18v6"/>'
+               '<path d="M14.5 28.5l4 4"/><path d="M49.5 28.5l-4 4"/><path d="M9 43h4"/><path d="M51 43h4"/></g>'
+               '<rect x="9" y="48" width="46" height="3" rx="1.5" fill="#6B615B"/>'
+               '<g transform="translate(25.5 33) scale(.2)">' + FLAME % "#C2502A" + "</g>",
+}
+STAGES = [
+    ("tend", "Tend", "the working day"),
+    ("rest", "Rest", "a break"),
+    ("bank", "Bank", "/hestia:done"),
+    ("keep", "Keep", "paused overnight"),
+    ("relight", "Relight", "the morning list"),
+]
+GREEK_KEY = (
+    '<svg class="key" aria-hidden="true"><defs><pattern id="key" width="14" height="14" '
+    'patternUnits="userSpaceOnUse"><path d="M0 12.5H14M11.5 12.5V2H3V9H8.5V5.5" fill="none" '
+    'stroke="#A4472B" stroke-width="1.6"/></pattern></defs>'
+    '<rect width="100%" height="14" fill="url(#key)"/></svg>'
+)
+
+
+def _icon(stage, size=64):
+    return (
+        '<svg width="%d" height="%d" viewBox="0 0 64 64" aria-hidden="true">'
+        '<rect width="64" height="64" rx="14" fill="#1C1714"/>'
+        '<rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" '
+        'stroke="#3A2E27" stroke-width="1.5"/>%s</svg>' % (size, size, STAGE_ICONS[stage])
+    )
 
 
 def _esc(value):
@@ -1136,12 +1239,27 @@ def _timeline_svg(prompts, now, paused):
 
 def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     """One self-contained HTML page. No scripts, no network, nothing that refreshes."""
+    if pause and pause.get("kind") == "break":
+        stage, label = "rest", "On a break"
+        hint = "It lifts itself. <code>/hestia:back</code> ends it early."
+    elif pause:
+        stage, label = "keep", "Banked for the night"
+        hint = "<code>/hestia:back</code> if tonight can't wait."
+    else:
+        stage, label, hint = "tend", "Tending the fire", ""
+
     if pause:
         status = _esc(pause_line(pause))
         if pause.get("note"):
             status += " <small>%s</small>" % _esc(pause["note"])
     else:
         status = "Working."
+
+    cycle = "".join(
+        '<div class="s%s">%s<span><b>%s</b>%s</span></div>'
+        % (" on" if key == stage else "", _icon(key, 32), name, _esc(what))
+        for key, name, what in STAGES
+    )
 
     if load["prompts"]:
         if load["last_break_at"]:
@@ -1201,7 +1319,8 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
         snaps = "<li>no snapshots yet</li>"
 
     tomorrow = (
-        "<pre>%s</pre>" % _esc(tomorrow_text.strip())
+        '<div class="term"><div class="term-bar"><i></i><i></i><i></i><span>TOMORROW.md</span></div>'
+        "<pre>%s</pre></div>" % _esc(tomorrow_text.strip())
         if tomorrow_text and tomorrow_text.strip()
         else '<p class="empty">No list yet. <code>/hestia:done</code> writes one.</p>'
     )
@@ -1212,9 +1331,16 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
 <title>Hestia · %(date)s</title>
 <style>%(css)s</style></head>
 <body><main>
-<h1>Hestia</h1>
-<p class="lede">%(date)s. The same reading as <code>/hestia:today</code>, on one page.</p>
-<section class="tile"><p class="status">%(status)s</p></section>
+<header class="banner">
+<svg width="76" height="76" viewBox="0 0 64 64" aria-hidden="true"><g class="flame">%(flame)s</g></svg>
+<div><h1>Hestia</h1><p class="tag">Keep the fire going. Don't burn out.</p>
+<p class="date">%(date)s. The same reading as <code>/hestia:today</code>, on one page.</p></div>
+%(key)s
+</header>
+<section class="tile">
+<div class="stage">%(icon)s<div><p class="label">%(label)s</p><p class="status">%(status)s</p>%(hint)s</div></div>
+<div class="cycle" aria-label="Stages of the day">%(cycle)s</div>
+</section>
 <section class="tile"><h2>Today</h2>%(facts)s</section>
 %(timeline)s
 <div class="grid">
@@ -1222,10 +1348,16 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
 <section class="tile"><h2>Saved work</h2><ul class="plain">%(snaps)s</ul></section>
 </div>
 <section class="tile" style="margin-top:18px"><h2>Tomorrow's list</h2>%(tomorrow)s</section>
-<footer>Read at %(time)s. This page doesn't refresh: run <code>hestia.py dashboard</code> again for a new reading.</footer>
+<footer>Read at %(time)s. This page doesn't refresh: run <code>/hestia:dashboard</code> again for a new reading.</footer>
 </main></body></html>
 """ % {
         "css": DASHBOARD_CSS,
+        "flame": FLAME % "#E8743B" + FLAME_CORE,
+        "key": GREEK_KEY,
+        "icon": _icon(stage, 72),
+        "label": label,
+        "hint": '<p class="hint">%s</p>' % hint if hint else "",
+        "cycle": cycle,
         "date": now.strftime("%A %d %B"),
         "time": now.strftime("%H:%M"),
         "status": status,
@@ -1887,11 +2019,16 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def claude_dir():
-    return Path(os.environ.get("HESTIA_CLAUDE_DIR") or (Path.home() / ".claude"))
+    if os.environ.get("HESTIA_CLAUDE_DIR"):
+        return Path(os.environ["HESTIA_CLAUDE_DIR"])
+    return claude_config_dir() or Path.home() / ".claude"
 
 
 def claude_json_path():
-    return Path(os.environ.get("HESTIA_CLAUDE_JSON") or (Path.home() / ".claude.json"))
+    if os.environ.get("HESTIA_CLAUDE_JSON"):
+        return Path(os.environ["HESTIA_CLAUDE_JSON"])
+    config = claude_config_dir()
+    return config / ".claude.json" if config else Path.home() / ".claude.json"
 
 
 def claude_md_path():
@@ -2325,7 +2462,9 @@ LINK_PATTERN = re.compile(r"\]\(([^)\s]+\.md)\)")
 
 
 def memory_root():
-    return Path(os.environ.get("HESTIA_MEMORY_ROOT") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_MEMORY_ROOT"):
+        return Path(os.environ["HESTIA_MEMORY_ROOT"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def memory_slug(path):

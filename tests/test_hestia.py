@@ -6,6 +6,7 @@ Linux and macOS have no real copy of.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1109,6 +1110,26 @@ class TestDashboard(TempHome):
         self.assertIn("refs/hestia/2026-10-29-180000", page)
         self.assertIn("checkout refs/hestia/2026-10-29-180000 -- .", page)
 
+    def on_stage(self, page):
+        self.assertEqual(page.count('class="s on"'), 1, "exactly one stage is lit")
+        return re.search(r'<div class="s on">.*?<b>(\w+)</b>', page).group(1)
+
+    def test_the_highlighted_stage_follows_the_pause(self):
+        self.assertEqual(self.on_stage(self.render()), "Tend")
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "break",
+            "until": (datetime.now().astimezone() + timedelta(minutes=30)).isoformat(),
+        })
+        self.assertEqual(self.on_stage(self.render()), "Rest")
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "done",
+            "until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat(),
+        })
+        page = self.render()
+        self.assertEqual(self.on_stage(page), "Keep")
+        self.assertIn("/hestia:back", page)
+        self.assertNotIn("<script", page, "the page stays static")
+
     def test_writes_nothing_but_the_page(self):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
@@ -1291,6 +1312,52 @@ class TestEverythingUsesTheLauncher(unittest.TestCase):
             text = md.read_text(encoding="utf-8")
             self.assertNotIn("scripts/hestia.py", text, md.name)
             self.assertIn(self.LAUNCHER, text, md.name)
+
+
+class TestClaudeConfigDir(TempHome):
+    """People with more than one Claude Code account set CLAUDE_CONFIG_DIR."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("HESTIA_LOG_DIR", "HESTIA_CLAUDE_DIR", "HESTIA_CLAUDE_JSON",
+                     "HESTIA_MEMORY_ROOT", "CLAUDE_CONFIG_DIR"):
+            os.environ.pop(name, None)
+        self.config = self.tmp / "claude-work"
+
+    def test_defaults_to_the_home_folder(self):
+        self.assertEqual(hestia.log_dir(), Path.home() / ".claude" / "projects")
+        self.assertEqual(hestia.claude_dir(), Path.home() / ".claude")
+        self.assertEqual(hestia.claude_json_path(), Path.home() / ".claude.json")
+        self.assertEqual(hestia.memory_root(), Path.home() / ".claude" / "projects")
+
+    def test_follows_claude_config_dir(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        self.assertEqual(hestia.log_dir(), self.config / "projects")
+        self.assertEqual(hestia.claude_dir(), self.config)
+        self.assertEqual(hestia.claude_json_path(), self.config / ".claude.json")
+        self.assertEqual(hestia.memory_root(), self.config / "projects")
+
+    def test_reads_prompts_from_that_account_only(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        project = self.config / "projects" / "-work"
+        project.mkdir(parents=True)
+        now = datetime.now().astimezone()
+        with (project / "s.jsonl").open("w") as handle:
+            handle.write(json.dumps({"type": "user", "timestamp": now.isoformat(), "cwd": "/work",
+                                     "message": {"content": "the work account"}}) + "\n")
+        prompts = hestia.read_prompts(now - timedelta(hours=1))
+        self.assertEqual([p["text"] for p in prompts], ["the work account"])
+
+    def test_explicit_overrides_still_win(self):
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.config)
+        os.environ["HESTIA_LOG_DIR"] = str(self.logs)
+        os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "c")
+        os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "c.json")
+        os.environ["HESTIA_MEMORY_ROOT"] = str(self.tmp / "m")
+        self.assertEqual(hestia.memory_root(), self.tmp / "m")
+        self.assertEqual(hestia.log_dir(), self.logs)
+        self.assertEqual(hestia.claude_dir(), self.tmp / "c")
+        self.assertEqual(hestia.claude_json_path(), self.tmp / "c.json")
 
 
 if __name__ == "__main__":
