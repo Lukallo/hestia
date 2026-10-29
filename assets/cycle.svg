@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img" aria-labelledby="t d"><title id="t">The day, as a fire</title><desc id="d">Tend during the day, bank it with /hestia:shutdown, keep it overnight while agents are paused, relight in the morning with yesterday's list ready.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img" aria-labelledby="t d"><title id="t">The day, as a fire</title><desc id="d">Tend during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight in the morning with yesterday's list ready; /hestia:back starts the day.</desc>
 <rect width="960" height="330" rx="24" fill="#1C1714"/>
 <g fill="none" stroke="#6B615B" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7">
 <path d="M178 100H302"/><path d="M418 100H542"/><path d="M658 100H782"/>
@@ -11,8 +11,9 @@
 <g transform="translate(800 54) scale(1.25)"><rect width="64" height="64" rx="14" fill="#2A211C"/><path d="M18 46a14 14 0 0 1 28 0z" fill="#F4B740"/><g stroke="#F4B740" stroke-width="2.5" stroke-linecap="round"><path d="M32 18v6"/><path d="M14.5 28.5l4 4"/><path d="M49.5 28.5l-4 4"/><path d="M9 43h4"/><path d="M51 43h4"/></g><rect x="9" y="48" width="46" height="3" rx="1.5" fill="#6B615B"/><g transform="translate(25.5 33) scale(.2)"><path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5C29 25 29 17 32 10z" fill="#C2502A"/></g></g>
 <g font-family="Georgia, 'Times New Roman', serif" font-size="26" fill="#F6EDE3" text-anchor="middle"><text x="120" y="172">Tend</text><text x="360" y="172">Bank</text><text x="600" y="172">Keep</text><text x="840" y="172">Relight</text></g>
 <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#A89E97" text-anchor="middle">
-<text x="120" y="196">your working day</text>
-<text x="360" y="196" fill="#F4B740" font-family="ui-monospace, Consolas, monospace">/hestia:shutdown</text>
+<text x="120" y="196" fill="#F4B740" font-family="ui-monospace, Consolas, monospace">/hestia:back</text>
+<text x="120" y="216">your working day</text>
+<text x="360" y="196" fill="#F4B740" font-family="ui-monospace, Consolas, monospace">/hestia:done</text>
 <text x="360" y="216">work saved, list written</text>
 <text x="600" y="196">agents paused overnight</text>
 <text x="840" y="196">yesterday's list, ready</text>

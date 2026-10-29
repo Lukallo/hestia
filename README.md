@@ -10,26 +10,24 @@
   <img src="https://img.shields.io/badge/brief-a%20shutdown%20command-A4472B?style=flat" alt="Brief: a shutdown command">
 </p>
 
-**One command that ends the working day in Claude Code.** `/hestia:done` banks whatever you have open, writes tomorrow's first move, and stops your agents until morning.
+**One command, `/hestia:done`, ends your working day in Claude Code: it saves your open work, writes tomorrow's first step, and stops your agents until morning.**
 
-> **The problem: compression burnout.** AI tools fit more work into the same hours. Agents keep running, the waits that used to give you breaks are gone, and the day no longer ends on its own.
->
-> **Who it's for:** people who build with Claude Code every day, run several sessions or repos at once, and find it hard to stop.
->
-> **The brief:** a shutdown command, one of the Claude Code Impact Lab's six ideas. Its one rule: give time back, never help you do more.
+It also tidies Claude's [auto memory](https://code.claude.com/docs/en/memory) when you clock out, its own take on "dreaming".
 
-- **Your work is saved without being touched.** Uncommitted changes in every repo you worked in today go into a `refs/hestia/<timestamp>` snapshot. Your branch, working tree and index stay exactly as they were.
-- **The agents stop when you do.** Unattended Claude Code runs get `SIGTERM`. Open sessions are paused by a hook until the next working morning.
-- **Picking back up is guaranteed, once.** However the morning starts, with a new session, a resumed one or the window you left open, the first one you're at after the pause is handed yesterday's list and the first thing to do. It happens once, then Hestia goes quiet. Scripted runs never take it. No alerts, no prompts, nothing always on screen.
+## Who it's for
+
+People who build with Claude Code every day and find it hard to stop. AI removed the natural end of the workday: each task finishes faster, agents keep running, and the day thins out instead of ending (compression burnout). Hestia answers the Claude Code Impact Lab brief, **a shutdown command**, by making stopping safe: picking back up is guaranteed.
 
 <p align="center">
-  <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
+  <img src="assets/cycle.svg" alt="The day as a fire: start the day with /hestia:back and tend it, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
 </p>
 <p align="center"><em>Tend the fire by day, bank it with <code>/hestia:done</code>, keep it overnight, relight it in the morning.</em></p>
 
-## Get started
+<p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-Needs Claude Code, `git` and Python 3 (as `python3` or `python`). Nothing else: the engine is standard library only. On Windows, install Git for Windows: Claude Code then runs the hooks in its Git Bash.
+## Install
+
+Needs `git` and Python 3 (`python3` or `python`), nothing else; on Windows, Git for Windows.
 
 **1. Install**, in Claude Code:
 
@@ -46,334 +44,82 @@ Needs Claude Code, `git` and Python 3 (as `python3` or `python`). Nothing else: 
 
 That's all you need. The first session next morning picks up where you left off.
 
-**Optional, once:** `/hestia:init` takes about a minute. Every question is skippable and has a default. It tells Hestia your working days and hours, and what your work is for.
-
-**Want to check it works before installing?** No Claude Code needed:
+**3. Optional, once:** `/hestia:init` takes about a minute. Every question is skippable and has a default. It tells Hestia your working days and hours, and what your work is for.
 
 ```text
-git clone https://github.com/Lukallo/hestia && cd hestia
-python3 plugins/hestia/scripts/hestia.py selftest
+/hestia:init
 ```
-
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `51/51 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
-
-That's it. You get:
-
-```text
-~/.hestia/
-├── TOMORROW.md     tomorrow's list: where to start, your note, the exact restore lines, sessions to resume
-├── pause.json      when the pause or break lifts (gone after /hestia:back)
-├── handover.json   when the morning handover happened, and which session got it
-├── handover-*.taken  the claim that lets exactly one session take the handover
-├── digest.json     the last Claude Code version /hestia:new told you about
-├── profile.json    your answers from /hestia:init
-├── connectors.json which connectors Hestia may use, asked once each
-└── config.json     your working days, resume hour and whether there's a screen
-
-~/.claude/CLAUDE.md
-└── a short "Hestia: about me" section, between its own markers
-
-<each repo you touched today>
-└── refs/hestia/<timestamp>   a snapshot of your uncommitted work
-```
-
-<details>
-<summary><b>Update or remove it</b></summary>
-
-From a terminal. To update:
-
-```text
-claude plugin marketplace update hestia
-claude plugin update hestia@hestia
-```
-
-To remove it completely:
-
-```text
-claude plugin uninstall hestia@hestia
-claude plugin marketplace remove hestia
-```
-
-If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them. To delete every one in a repo, run this in it: `git for-each-ref --format='delete %(refname)' refs/hestia | git update-ref --stdin`. See [What it touches](#what-it-touches-and-how-to-undo-it).
-
-</details>
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## AI removed the natural end of the workday
+## Use it
 
-<img src="assets/logo.svg" width="72" align="right" alt="Hestia logo: a single flame on a coal-coloured tile">
-
-Hestia is the Greek goddess of the hearth, and her one job was to keep the fire going. A fire that burns too hot burns out. A fire that's tended, banked at night and relit in the morning lasts. This tool doesn't help you burn brighter.
-
-Each task finishes faster, so there's always one more that fits. With agents running, the work keeps going whether you're there or not. Stopping has become a deliberate act, and nobody has built the act. Starting work has infinite tooling. Ending it has none.
-
-So the day doesn't end. It just thins out.
-
-The reason people don't stop isn't discipline. Stopping feels like dropping something: the fear is losing the thread. So shutting down is only possible if picking back up is guaranteed. That's the whole mechanism here.
-
-Burnout research splits recovery into breaks during the day and *detaching* in the evening: not doing the work, and not thinking about it either. AI compression erodes both. The waits that used to give breaks for free are gone, and the day has no finish line. [PLAN.md](PLAN.md) maps each cause onto the piece that answers it.
-
-### Who it's for
-
-People who build with Claude Code every day, run several sessions or repos at once, and find it hard to stop.
-
-### The brief
-
-Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**. Its one rule is that it has to give time back, not help you do more.
-
-<p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
-
-## Eight commands, three hooks, nothing else
-
-| | Command | What happens |
+| | Command | What it does |
 |---|---|---|
-| <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. If this computer seems to have no screen, it asks about that too. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
-| <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list starting with the first thing to do, and pauses Claude until the next working morning |
-| <img src="assets/icons/rest.svg" width="40" alt="Rest: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list, because the day isn't over |
-| <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and tells you where to start and what ran while you were away |
-| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused or on a break, and today's load, only ever when you ask |
-| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes. Off if you told `/hestia:init` there's no screen |
-| <img src="assets/icons/home.svg" width="40" alt="Home: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, built from your real commits and prompts. Paste it into an update instead of writing one |
-| <img src="assets/icons/kindling.svg" width="40" alt="Kindling: one new thing, not the woodpile"> | `/hestia:new` | Reads only what changed in Claude Code since your version or your last check, and shows you **one** thing from it, in five lines |
+| <img src="assets/icons/tend.svg" width="40" alt="Tend icon: lighting the fire for the first time"> | `/hestia:init` | Once: learns your hours and why you build, asks about connectors (and a screen, if it finds none), adds a short section to `~/.claude/CLAUDE.md` |
+| <img src="assets/icons/kindling.svg" width="40" alt="Kindling icon: one new thing, not the woodpile"> | `/hestia:new` | Shows one thing worth knowing from what changed in Claude Code since your last check |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers icon: reading how warm it's running"> | `/hestia:today` | Whether you're paused, and today's load, only when you ask |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers icon: the same reading on one page"> | `/hestia:dashboard` | The same reading, plus saved work and tomorrow's list, on one static page that never refreshes; off if you told `/hestia:init` there's no screen |
+| <img src="assets/icons/rest.svg" width="40" alt="Rest icon: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself |
+| <img src="assets/icons/home.svg" width="40" alt="Home icon: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, from your real commits and prompts |
+| <img src="assets/icons/bank.svg" width="40" alt="Bank icon: embers covered for the night"> | `/hestia:done [note]` | Saves open work, writes tomorrow's list with a "Start here" step, pauses Claude until the next working morning |
+| <img src="assets/icons/spark.svg" width="40" alt="Spark icon: striking a light early"> | `/hestia:back` | Lifts a pause or break early and tells you where to start |
 
-Plus two things that happen on their own, and nothing else:
-
-| | When | What happens |
-|---|---|---|
-| <img src="assets/icons/keep.svg" width="40" alt="Keep: one ember guarded overnight"> | *at shutdown* | Unattended agents are sent `SIGTERM`. Interactive sessions are left alone and reported; a `PreToolUse` hook stops them at their next step instead of killing a window you're sitting in front of |
-| <img src="assets/icons/relight.svg" width="40" alt="Relight: sunrise over the hearth"> | *next morning* | `SessionStart` and `UserPromptSubmit` hooks hand yesterday's list to the first session you're at after the pause, **once**: a new session, a resumed one, or the window you left open, on its next prompt. It opens with what ran overnight. Scripted runs never take it |
-
-The second one is the whole trick. The context you left with is given back automatically, and exactly once, because a recap on every session is just noise. Exactly once is enforced, not hoped for: the session that takes the list creates a claim file atomically, so two sessions opening in the same instant can't both get it.
-
-> [!TIP]
-> While paused or on a break, the hook blocks every tool call except the way back in, including connector tools, subagents and other plugins' tools. `/hestia:back` is explicitly allowlisted, from Bash or PowerShell, so you can never lock yourself out. It only gets through on its own: anything chained to it, piped or run in a subshell is blocked.
-
-### Stopping agents, carefully
-
-A headless run (`claude --print`, `--output-format`) has nobody watching it, so it's the kind that quietly burns all night. Those get `SIGTERM`: graceful, never `SIGKILL`.
-
-An interactive session has a person at it, so killing it would take work away rather than give time back. It's reported and paused instead.
-
-Hestia never signals its own process or anything that spawned it, so the command can't stop itself. `--keep-agents` reports without stopping anything; `--stop-all` includes interactive sessions.
-
-A break is different. Nothing is sent `SIGTERM` by default, because a headless run's work should still be there when you're back in an hour. The hook pauses it at its next step instead. `break --stop-agents` stops headless runs too.
+On their own: while you're paused, a hook blocks every tool call, including connectors, subagents and other plugins, except `/hestia:back` on its own. Next morning the first session you're at (new, resumed, or a window left open, on its next prompt) gets yesterday's list exactly once, with where to start and whether anything ran overnight; scripted runs never take it. Then Hestia goes quiet.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## What you'll see: real output, one night
+## What you'll see
 
-Everything below was captured from a run of the engine against a throwaway repo, with `HESTIA_HOME` pointed at a temp folder so it didn't pause a live session. To keep the run short, the night was a two-minute pause (`--until`), which then ran out on its own, exactly as a real one does at 8am.
-
-> [!NOTE]
-> The only edit is shortening the temp paths to `~/.hestia` and `/path/to/demo`. The run used `--keep-agents`, so nothing was signalled.
-
-**Ending the day** (`/hestia:done`, which passes your note and the first thing to do next):
+`/hestia:done unblocking the CSV import for the ops team`, from a real run on a throwaway repo (temp path shortened):
 
 ```text
-Clocked out until Thu 29 Oct 19:17.
-  saved 2 files in demo -> refs/hestia/2026-10-29-191558
+Clocked out until Fri 30 Oct 08:00.
+  saved 2 files in demo -> refs/hestia/2026-10-29-195708
   tomorrow's list: ~/.hestia/TOMORROW.md
 ```
 
-Three lines, and it stops. When Claude sessions are still open, a fourth line reports them: `1 Claude session still open - paused, they'll stop at their next step`.
-
-**What it leaves for the morning** (`~/.hestia/TOMORROW.md`):
-
-```markdown
-# Tomorrow - Thu 29 Oct
-
-> unblocking the CSV import for the ops team
-
-## Start here
-
-- finish test_import.py for quoted semicolons, then fix parse_row
-
-## Where you left off
-
-- **demo** (main) - 2 files saved
-  `git -C /path/to/demo checkout refs/hestia/2026-10-29-191558 -- .`
-  last commit: Accept semicolon-separated exports in the CSV import
-
-## Today
-
-- no prompts recorded today
-
-## Overnight
-
-- nothing was running
-```
-
-The throwaway setup has no session history, so `Today` is empty and there is no `Sessions to pick up` section. On a real machine that section lists today's sessions, newest first, each with the `cd <folder> && claude --resume <id>` line that reopens it.
-
-**If a session tries to work while you're clocked out** (the `PreToolUse` hook's answer to an `Edit`):
-
-```text
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Clocked out until Thu 29 Oct 19:17. Run /hestia:back if tonight can't wait."}}
-```
-
-A prompt typed into an open window while still paused got nothing from the handover: the list isn't due until the pause ends.
-
-**Next morning.** Once the pause ran out, a scripted session start got nothing, because no person is there to read it. Then the next prompt typed into the window left open overnight got this as context. It is the `additionalContext` field of the `UserPromptSubmit` hook's JSON, printed on its own:
-
-```text
-Where the last working day was left off, from Hestia, written at shutdown. Keep it in mind to pick up the thread, and do not act on it unless asked. If the user greets you or asks where they were, answer with the 'Start here' item in one sentence. Do not recite the list.
-
-Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
-
-# Tomorrow - Thu 29 Oct
-
-> unblocking the CSV import for the ops team
-
-## Start here
-
-- finish test_import.py for quoted semicolons, then fix parse_row
-
-## Where you left off
-
-- **demo** (main) - 2 files saved
-  `git -C /path/to/demo checkout refs/hestia/2026-10-29-191558 -- .`
-  last commit: Accept semicolon-separated exports in the CSV import
-
-## Today
-
-- no prompts recorded today
-
-## Overnight
-
-- nothing was running
-```
-
-A new session opened after that got nothing, and asking `hestia.py handover` said:
-
-```text
-Handed over at Thu 29 Oct 19:17.
-```
-
-**Coming back early** (`/hestia:back`). This is a second run: `/hestia:done`, then `/hestia:back` a minute later.
-
-```text
-Back on. Paused since Thu 29 Oct 19:17.
-Start here: finish test_import.py for quoted semicolons, then fix parse_row
-Overnight: nothing ran between Thu 29 Oct 19:17 and Thu 29 Oct 19:18.
-Yesterday's list: ~/.hestia/TOMORROW.md
-```
-
-The next prompt after that got nothing, because `back` takes the handover itself.
-
-**Checking in, when you ask** (`/hestia:today`, on a real machine):
-
-```text
-Working.
-  14 prompts across 1 project, 0.8 hours from first to last
-  no break longer than 20 minutes today
-```
-
-**Taking a break, and the other two commands.** These come from a separate run from the ones above, against a different throwaway repo with two commits made that day. As before, `HESTIA_HOME` pointed at a temp folder and the only edit is shortening the temp path to `/path/to/demo`.
-
-`/hestia:break 45m`:
-
-```text
-On a break until 19:27.
-  saved 2 files in demo -> refs/hestia/2026-10-29-184216
-  1 Claude session paused, they'll stop at their next step
-```
-
-The third line is a real Claude Code window that was open on the machine. A break reports it and leaves it to the hook; it signals nothing.
-
-`/hestia:today` during the break, and the hook's answer to an `Edit`:
-
-```text
-On a break until 19:27.
-  no prompts recorded today
-```
-
-```text
-{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "On a break until 19:27. Run /hestia:back to end it early."}}
-```
-
-`/hestia:back`, which hands back where you were before the break rather than yesterday's list:
-
-```text
-Back on. On a break since 18:42.
-Before the break: git -C /path/to/demo checkout refs/hestia/2026-10-29-184216 -- .
-```
-
-The facts `/hestia:why` writes its paragraph from. The command reads them as JSON and turns them into plain language; this is the same data as text:
-
-```text
-What the work since Thu 29 Oct touched:
-  demo (main): 2 commits, 2 files uncommitted
-    91b73e4 Accept semicolon-separated exports in the CSV import
-    db06b6b Start the CSV import for the ops team
-  0 prompts
-```
-
-The facts `/hestia:new` picks its one item from. `--since` was set three releases back so there was something to show:
-
-```text
-3 releases since 2.1.309 (you have 2.1.312):
-  2.1.312  39 changes
-  2.1.311  92 changes
-  2.1.310  26 changes
-```
-
-Run again with nothing new since the last check:
-
-```text
-Nothing new since 2.1.312.
-```
-
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Your work is saved without touching your repo
+## What it touches, and how to undo it
 
-Hestia builds the snapshot commit through a **temporary git index**, so your working tree, your real index and your current branch are left exactly as they were:
-
-```text
-GIT_INDEX_FILE=<temp> git read-tree HEAD
-GIT_INDEX_FILE=<temp> git add -A
-git commit-tree <tree> -p HEAD    ->  git update-ref refs/hestia/<timestamp>
-```
-
-Nothing is stashed, nothing is committed to your branch, nothing moves. The test suite asserts that `.git/index` is **byte-identical** before and after.
-
-**To get your work back:**
-
-```text
-git -C <repo> checkout refs/hestia/<timestamp> -- .
-```
-
-The exact line, with the real timestamp, is written into tomorrow's list.
-
-### What it touches, and how to undo it
+Snapshots are built through a temporary git index, so your branch, working tree and index stay exactly as they were. Get work back with `git -C <repo> checkout refs/hestia/<timestamp> -- .` (the exact line is in tomorrow's list).
 
 | Thing | Where | Undo |
 |---|---|---|
-| Snapshots | `refs/hestia/*` in each repo. `done` deletes those older than `keep_snapshots_days` (30) | `git update-ref -d refs/hestia/<ts>` |
+| Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
 | Pause or break state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
-| Handover state | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` hands the list over once more |
+| Handover marker | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
 | Config | `~/.hestia/config.json` | delete it |
-| Your answers | `~/.hestia/profile.json` | delete it |
-| Connector choices | `~/.hestia/connectors.json` | delete it, or re-run `/hestia:init` to change a choice |
-| About-me section | `~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->` | `/hestia:init remove` puts the file back byte for byte (a backup is kept in `~/.hestia/backups/`) |
-| Dashboard page | `~/.hestia/dashboard.html`, only after `/hestia:dashboard` | delete it |
+| Claude's memory, tidied at `/hestia:done` | the memory folders of today's projects, backed up first to `~/.hestia/backups/memory/` | `hestia dream restore` |
+| Your answers and connector choices | `~/.hestia/profile.json`, `~/.hestia/connectors.json` | delete them, or re-run `/hestia:init` |
+| About-me section | `~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->` | `/hestia:init remove` restores the file byte for byte |
+| Dashboard page | `~/.hestia/dashboard.html` | delete it |
 
-It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything. `/hestia:new` is the only piece that uses the network, and only to read Claude Code's public changelog. It only touches `CLAUDE.md` inside its own markers, and only when you run `/hestia:init`.
+It never edits your `settings.json`, never commits to your branch, and never pushes. It touches `CLAUDE.md` only inside its own markers, only when you run `/hestia:init`. Only `/hestia:new` uses the network, to read Claude Code's public changelog.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 51 checks, 140 tests
+## What it never does
 
-One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
+- No notifications, reminders or nudges: every command runs because you typed it.
+- No always-on dashboard, streaks or scores: `/hestia:dashboard` only opens when you type it, and nothing pings you.
+- No summary at shutdown: `/hestia:done` answers in three lines and stops.
+- Nothing runs overnight: unattended agents are stopped and open sessions are paused until morning.
+
+<p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
+
+## Prove it works
 
 ```text
 python3 plugins/hestia/scripts/hestia.py selftest
+python3 -m unittest discover -s tests
 ```
 
-Real output:
+<details>
+<summary><b>Real output: 47 checks, 110 tests</b></summary>
 
 ```text
 PASS done runs
@@ -383,9 +129,7 @@ PASS branch unchanged
 PASS working tree unchanged
 PASS index byte-identical
 PASS uncommitted file is recoverable
-PASS snapshot skips large untracked files
 PASS tomorrow's list written
-PASS done prunes snapshots older than the limit
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
@@ -407,7 +151,6 @@ PASS back runs
 PASS old names still work as aliases
 PASS hook is silent after back
 PASS expired pause clears itself
-PASS done after midnight resumes this morning
 PASS break runs
 PASS break saves where you are
 PASS hook pauses agents during a break
@@ -422,173 +165,66 @@ PASS new degrades cleanly offline
 PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
-PASS CLAUDE.md section stays inside its budget
 PASS init remove restores CLAUDE.md exactly
 PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-51/51 checks passed
+47/47 checks passed
 ```
 
-The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
-
-The 140 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The unittest result (the commands under test print their own output in between, left out here):
 
 ```text
-python3 -m unittest discover -s tests -v
+Ran 110 tests in 33.009s
+
+OK (skipped=6)
 ```
 
-```text
-Ran 140 tests in 56.342s
+That run was on Windows, where 6 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, and 2 dashboard tests use a shell-script stand-in browser. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
 
-OK (skipped=7)
-```
-
-That run was on Windows, where 7 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, 2 use a shell-script stand-in browser, and 1 needs `time.tzset`, which is POSIX only. CI runs them on Linux and macOS.
-
-`tests/test_platforms.py` covers what differs between Linux, macOS and Windows: notes, prompts and paths in any language, folders with spaces, the restore line pasted into each shell on the machine, and every hook run the way Claude Code runs it. Where it can, it also recreates Windows' text encodings, so a regression shows up on any machine.
-
-### Next to other plugins and connectors
-
-Hestia's pause is a `PreToolUse` hook, and other plugins can have their own. Claude Code ranks one hook's deny above any other hook's allow, so another plugin can't approve its way past the pause. A live check runs real `claude -p` sessions with Hestia, a stand-in connector and a stand-in plugin that approves every tool call:
-
-```text
-tests/compat/run.sh
-```
-
-Real output, Claude Code 2.1.312:
-
-```text
-PASS not paused: the connector's tool runs as normal
-PASS paused: the connector's tool is blocked, though another plugin approves it
-PASS paused: a subagent can't run commands
-PASS paused: another plugin's command is blocked
-PASS paused: /hestia:back still gets you out
-PASS morning: a scripted run doesn't take the handover
-PASS morning: a person gets Hestia's handover and the other plugin's context
-
-7/7 checks passed
-```
-
-It needs the `claude` CLI and costs a few cents per run. Each scenario uses a throwaway `HESTIA_HOME`, so nothing on your machine is paused.
-
-<p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
-
-## What it deliberately doesn't do
-
-The brief's one rule is that it has to give time back, not help you do more. So:
-
-- **No notifications, reminders or nudges.** Nothing ever interrupts you. Every command runs because you typed it.
-- **No live dashboard.** The workload numbers live inside `/hestia:today`, and `/hestia:dashboard` writes the same facts to a static page, both only when asked. Nothing refreshes, nothing sits open in a tab, and there are no totals or comparisons. A thing you have to check is a thing that costs attention.
-- **No streaks, scores or goals.** Measuring rest turns rest into work.
-- **No summary at shutdown.** `/hestia:done` answers in three lines and stops. A command that ends the day shouldn't give you more to read.
-- **No break suggestions.** `/hestia:break` says when it ends and what it saved. What you do on it is yours.
-- **No release digest.** `/hestia:new` shows one change, not the woodpile, and says nothing at all when nothing changed.
-
-The time it saves is the stashing, the "where was I?" note, the morning re-orientation, and the agents that would otherwise have run all night.
-
-## Scope
-
-All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. So is the morning recap on your first prompt. The other automatic pieces it describes are not: the opt-in lunch break, a recap after a midday break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
-
-## If something goes wrong
-
-| What you see | What to do |
-|---|---|
-| Every tool call is denied with "Clocked out until..." | You ran `/hestia:done`. Run `/hestia:back`, or delete `~/.hestia/pause.json` |
-| Denied with "On a break until..." | A break. It lifts itself at that time, or `/hestia:back` ends it now |
-| The morning list didn't appear | The session was resumed with `--continue`, the pause hadn't ended yet, or the list was already handed over. Delete `~/.hestia/handover.json` to get it again |
-| `/hestia:why` shows no commits for a repo you committed to today | The commits were made under a different git identity from the one that repo uses now |
-| `/hestia:new` always says nothing changed | `~/.hestia/digest.json` already has the newest version. Delete it to see the changes again |
-| `/hestia:dashboard` says there's no dashboard on this computer | You told `/hestia:init` it has no screen. Run `/hestia:init` again and pick "It has a screen" |
-| Commands fail with `python3: command not found` | Install Python 3. On Windows the command is usually `python`, see the limitations below |
-
-## Honest limitations
-
-- Agent stopping only reaches Claude Code processes on **this machine**, found via `ps`.
-- On Windows the pause works, but nothing is signalled, and the hooks need Git for Windows.
-- `/hestia:new` needs the network. Offline it says it couldn't check, and does nothing else.
-- We can't claim burnout goes down. We can claim the day has an end, the agents stopped, and nothing ran between shutdown and morning.
-
-<details>
-<summary><b>Limitations in detail</b></summary>
-
-- Agent stopping finds Claude Code processes on **this machine**, via `ps`. A run on a CI box, a remote host or inside a container keeps going; so does anything not launched as `claude`.
-- Process detection is POSIX (`ps`, `SIGTERM`). On Windows the pause still works (the hook blocks the next step), but nothing is signalled.
-- The handover tells a scripted run from a person using what Claude Code passes to hooks (`CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`). On versions that pass neither, it checks the launching process's flags. If it still can't tell, it assumes a person is there, because a list handed to a script is lost.
-- The overnight line is read from Claude Code's session logs. Work done outside Claude Code isn't in it.
-- `Sessions to pick up` lists sessions you typed in today, newest first, with a `claude --resume` line for each. Sessions with no prompts today aren't listed.
-- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out, but only as a command on its own.
-- A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
-- The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
-- A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
-- Untracked files over `snapshot_max_mb` (50 MB by default) are not saved. `TOMORROW.md` names them under the repo, but the snapshot can't restore them. The limit is per file, so many small new files can still add up.
-- A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
-- `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
-- `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
-- Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
-- We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
-- Developed on macOS and Linux. CI runs the selftest and unit tests on Windows from PowerShell, and the selftest again through the launcher in Git Bash. The plugin hasn't been run end to end inside Claude Code on Windows.
-- The hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher. It uses `python3`, or `python` when `python3` is missing or is the Microsoft Store placeholder. Claude Code runs hooks in Git Bash when Git for Windows is installed. Without it, Claude Code runs them in PowerShell, where the launcher can't start, so the pause isn't enforced. Hestia needs git anyway.
-
-</details>
-
-<p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
-
-## Use it your way
-
-<details>
-<summary><b>Without Claude Code: the engine is a plain CLI</b></summary>
-
-```text
-python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix" --next "write the release note"
-python3 plugins/hestia/scripts/hestia.py break 45m
-python3 plugins/hestia/scripts/hestia.py today
-python3 plugins/hestia/scripts/hestia.py dashboard
-python3 plugins/hestia/scripts/hestia.py back
-python3 plugins/hestia/scripts/hestia.py handover
-python3 plugins/hestia/scripts/hestia.py why
-python3 plugins/hestia/scripts/hestia.py new
-```
-
-`break` takes `45m`, `1h30m`, `90` or an end time like `13:50`, plus `--stop-agents` and `--json`. `why` takes `--days N`, `--repo PATH` and `--json`. `new` takes `--since VERSION` and `--json`.
-
-`handover` says whether the morning list is still due, and `--again` re-arms it. `shutdown` also takes `--next TEXT`, `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`. `dashboard` takes `--out PATH` and `--no-open`.
+The selftest never touches real processes and reads a local changelog, so it runs offline. The tests use real git repos in temp folders; nothing is mocked.
 
 </details>
 
 <details>
-<summary><b>Config: resume hour, working days, extra repos, screen</b></summary>
+<summary><b>More: limitations, config, CLI, how agents are stopped</b></summary>
 
-Optional, at `~/.hestia/config.json`:
+### Limitations
+
+- Agent stopping only reaches Claude Code processes on this machine, found via `ps`. On Windows the pause works but nothing is signalled.
+- Hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher that uses `python3`, or `python` when `python3` is missing or the Microsoft Store placeholder. On Windows it needs Git for Windows (Claude Code then runs hooks in Git Bash); without it the pause isn't enforced. CI runs the selftest and tests on Windows, but it hasn't been run end to end inside Claude Code on Windows.
+- If a scripted run ever gets the morning list, set `HESTIA_SESSION_KIND=headless` in that job's environment.
+- `/hestia:new` needs the network; offline it says it couldn't check.
+- We can't claim burnout goes down. We can claim the day has an end and nothing ran between shutdown and morning.
+
+### Config
+
+At `~/.hestia/config.json` (written by `/hestia:init`, or by hand) (`working_days`: Monday = 0; `repos` adds repos Claude Code never saw):
 
 ```json
-{
-  "resume_hour": 8,
-  "working_days": [0, 1, 2, 3, 4],
-  "repos": ["/Users/you/code/side-project"],
-  "screen": true
-}
+{ "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "repos": ["/Users/you/code/side-project"] }
 ```
 
-`working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning. Shutting down after midnight but before `resume_hour` resumes that same morning. The resume time follows your local clock, so a clock change in between doesn't move it.
+`"screen": false` turns the dashboard off on a computer with no screen.
 
-`keep_snapshots_days` is how many days `done` keeps a snapshot before it deletes it. The default is 30. Set it to 0 to keep every snapshot. Only refs under `refs/hestia/` with a date in their name are deleted, and a break never deletes any.
+### Without Claude Code
 
-`snapshot_max_mb`: untracked files bigger than this many MB are left out of snapshots, so each `done` and `break` doesn't copy them into `.git/objects`. The default is 50. Set it to 0 to save everything. Tracked files are always saved, whatever their size.
+The engine is a plain CLI: `python3 plugins/hestia/scripts/hestia.py done --note "..." --next "..."`, and likewise `init`, `break 45m`, `today`, `dashboard`, `back`, `why`, `new`. `handover` says whether the morning list is still due (`--again` re-arms it). `done` takes `--until`, `--keep-agents` and `--stop-all`; `break` takes `--stop-agents`; `dashboard` takes `--out` and `--no-open`; most take `--json`. The old names `shutdown`, `resume` and `status` still work.
 
-`screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
+### How agents are stopped
 
-If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work and a personal account apart, Hestia follows it: it reads that account's session logs, tidies that account's memory at `done`, and writes its `/hestia:init` section to that account's `CLAUDE.md`.
+At `/hestia:done`, unattended runs (`claude --print`) get `SIGTERM`, never `SIGKILL`. Interactive sessions are left alone and paused by the hook at their next step. `--keep-agents` stops nothing; `--stop-all` includes interactive sessions. A break signals nothing unless you pass `--stop-agents`. The pause is a `PreToolUse` hook, and Claude Code ranks a deny above any other hook's allow, so another plugin can't approve its way past it; `tests/compat/run.sh` checks this with real `claude -p` sessions.
 
 </details>
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
+
+A nod to the Dublin Claude Code community: no endless agent loops here, since `/hestia:done` gives every one an end.
 
 ## Project links
 
-- [PLAN.md](PLAN.md): the full design, the burnout grounding, and the audit of what was cut and why.
+- [PLAN.md](PLAN.md): the full design, the burnout research, and what was cut and why.
 - [assets/BRAND.md](assets/BRAND.md): the visual identity, palette and icon rules.
-- [REFERENCE.md](REFERENCE.md): projects we learned from, and what we took from each.
-- [LICENSE](LICENSE): MIT. Use it, change it and share it; keep the copyright notice.
+- [REFERENCE.md](REFERENCE.md): projects we learned from.
+- [connectors/README.md](connectors/README.md): what Hestia could work with.
