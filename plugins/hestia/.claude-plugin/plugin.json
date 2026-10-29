@@ -1,0 +1,14 @@
+{
+  "name": "hestia",
+  "description": "Save open work, write tomorrow's list, and pause agents until morning.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lukallo"
+  },
+  "keywords": [
+    "shutdown",
+    "burnout",
+    "focus",
+    "end-of-day"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "hestia",
+  "owner": {
+    "name": "Lukallo"
+  },
+  "metadata": {
+    "description": "End the working day in Claude Code.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "hestia",
+      "source": "./plugins/hestia",
+      "description": "Save open work, write tomorrow's list, and pause agents until morning."
+    }
+  ]
+}
