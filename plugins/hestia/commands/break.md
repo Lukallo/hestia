@@ -9,7 +9,7 @@ Start a break. If the user gave a length in `$ARGUMENTS` (like `45m`, `1h30m`,
 the break lasts 45 minutes.
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" break <length if given>
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" break <length if given>
 ```
 
 Report back in **two lines at most**: when the break ends, and what got saved.

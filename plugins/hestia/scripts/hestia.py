@@ -1236,8 +1236,8 @@ def cmd_hook(args):
     tool = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
 
-    # Never block the way back in.
-    if tool == "Bash":
+    # Never block the way back in. On Windows, Claude may run it in PowerShell.
+    if tool in ("Bash", "PowerShell"):
         command = str(tool_input.get("command") or "")
         if RESUME_PATTERN.search(command):
             return 0

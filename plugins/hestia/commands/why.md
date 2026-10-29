@@ -7,7 +7,7 @@ allowed-tools: Bash
 Gather the facts first. Never write this from memory alone:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" why --json
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" why --json
 ```
 
 If `$ARGUMENTS` is a path to a folder, add `--repo "<that path>"`. If it names a
