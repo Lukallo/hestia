@@ -44,13 +44,21 @@ can be skipped, and the first option is always the default. If `profile` or
 
 Keep the wording plain. This person may not be technical, so don't say "MCP" or "config".
 
-## 3. Connectors, only if there are any
+## 3. Memory and connectors, in one more call
 
-Only ask about connectors whose `kind` is calendar, chat, tasks or email,
-because those are the ones Hestia has a use for. If there are none, skip this step
-completely and say nothing about connectors. Never suggest installing one.
+Ask one more `AskUserQuestion` call. It always has this question:
 
-Otherwise ask one multi-select question: "Hestia found these. Which may it
+- **Tidy Claude's memory when you clock out?** (header "Memory"). Options: "Yes,
+  tidy it" (the default; description: "At /hestia:done, merge duplicate notes and
+  drop ones today proved wrong. Backed up first, and it never adds anything") and
+  "No, leave it". If `profile.dream` is already set, make that the first option,
+  labelled "Keep: …". Save it as `"dream": true|false`.
+
+Add the connectors question to the same call, but only for connectors whose `kind` is calendar, chat, tasks or email,
+because those are the ones Hestia has a use for. If there are none, leave the question
+out and say nothing about connectors. Never suggest installing one.
+
+The connectors question is one multi-select: "Hestia found these. Which may it
 use? It only acts when you run a Hestia command." Each option is the connector's
 name, with a description of what Hestia would do with it:
 - calendar: resume at your first meeting and keep lunch free
@@ -67,7 +75,7 @@ Build the answers as JSON and pass it on stdin. Leave out any field the user ski
 ```
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init write --seen "<servers>" --answers - <<'JSON'
 {"why": "...", "helps": "...", "tone": "plain|warm|detail",
- "resume_hour": 8, "working_days": [0, 1, 2, 3, 4],
+ "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "dream": true,
  "connectors": {"<connector key>": "allowed|declined"}}
 JSON
 ```

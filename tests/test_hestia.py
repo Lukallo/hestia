@@ -38,6 +38,8 @@ class TempHome(unittest.TestCase):
         os.environ["HESTIA_SESSION_KIND"] = "interactive"
         os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "claude")
         os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "claude.json")
+        os.environ["HESTIA_MEMORY_ROOT"] = str(self.tmp / "memory-root")
+        os.environ.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
 
     def tearDown(self):
         os.environ.clear()
@@ -211,6 +213,7 @@ class TestPauseAndHook(TempHome):
             "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
             'sh "/plugins/hestia/scripts/hestia" back',  # the launcher
             "sh '/plugins/hestia/scripts/hestia' today",
+            'sh "/plugins/hestia/scripts/hestia" dream restore',  # undo works while paused
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
@@ -1010,6 +1013,116 @@ class TestDashboard(TempHome):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
         self.assertFalse((self.home / "TOMORROW.md").exists())
+
+
+class TestDream(TempHome):
+    """Tidying Claude's auto memory at done: facts, backup, check, restore."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.tmp / "proj"
+        self.project.mkdir()
+        self.project = self.project.resolve()  # macOS temp paths sit behind /var -> /private/var
+        self.memory = self.tmp / "memory-root" / hestia.memory_slug(self.project) / "memory"
+        self.memory.mkdir(parents=True)
+        self._cwd = os.getcwd()
+        os.chdir(str(self.project))
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        super().tearDown()
+
+    def note(self, name, description, body="text"):
+        (self.memory / (name + ".md")).write_bytes(
+            ("---\nname: %s\ndescription: %s\n---\n%s\n" % (name, description, body)).encode())
+
+    def index(self, *names):
+        (self.memory / "MEMORY.md").write_bytes(
+            "".join("- [%s](%s.md) - x\n" % (n, n) for n in names).encode())
+
+    def snapshot(self):
+        return {p.name: p.read_bytes() for p in self.memory.iterdir()}
+
+    def test_slug_matches_claude_codes_folder_names(self):
+        self.assertEqual(hestia.memory_slug(r"C:\Users\arunn\Downloads\claude_hackathon"),
+                         "C--Users-arunn-Downloads-claude-hackathon")
+        self.assertEqual(hestia.memory_slug("/home/a/my.repo"), "-home-a-my-repo")
+
+    def test_findings(self):
+        self.note("tabs", "indent with tabs")
+        self.note("tabs-again", "indent with tabs please")
+        self.note("orphan", "not in the index")
+        (self.memory / "broken.md").write_bytes(b"no frontmatter\n")
+        self.index("tabs", "tabs-again", "gone")
+        facts = hestia.memory_findings(self.memory)
+        self.assertEqual(facts["index_points_to_missing"], ["gone.md"])
+        self.assertEqual(facts["missing_from_index"], ["broken.md", "orphan.md"])
+        self.assertEqual(facts["broken"], ["broken.md"])
+        self.assertIn(["tabs-again.md", "tabs.md"], [sorted(d) for d in facts["duplicates"]])
+        self.assertFalse(facts["over_load_limit"])
+
+    def test_flags_an_index_too_long_to_load(self):
+        self.note("a", "b")
+        self.index(*["a"] * (hestia.MEMORY_LOAD_LINES + 1))
+        self.assertTrue(hestia.memory_findings(self.memory)["over_load_limit"])
+
+    def test_plan_backs_up_and_restore_is_byte_identical(self):
+        self.note("tabs", "indent with tabs")
+        self.index("tabs")
+        before = self.snapshot()
+        plan = hestia.dream_plan()
+        self.assertTrue(plan["backup"])
+        self.assertEqual(len(plan["projects"]), 1)
+        (self.memory / "tabs.md").write_bytes(b"changed")
+        (self.memory / "MEMORY.md").unlink()
+        self.assertEqual(hestia.dream_restore(), [str(self.memory)])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_check_counts_a_good_tidy(self):
+        self.note("tabs", "indent with tabs")
+        self.note("tabs-again", "indent with tabs please")
+        self.index("tabs", "tabs-again")
+        plan = hestia.dream_plan()
+        (self.memory / "tabs-again.md").unlink()
+        self.index("tabs")
+        result = hestia.dream_check(plan["backup"])[0]
+        self.assertEqual((result["removed"], result["rolled_back"]), (["tabs-again.md"], False))
+        self.assertTrue(result["index_changed"])
+
+    def test_check_rolls_back_a_broken_or_inventive_tidy(self):
+        self.note("tabs", "indent with tabs")
+        self.index("tabs")
+        before = self.snapshot()
+        for damage in ("broken", "invented", "dangling"):
+            plan = hestia.dream_plan()
+            if damage == "broken":
+                (self.memory / "tabs.md").write_bytes(b"lost the frontmatter")
+            elif damage == "invented":
+                self.note("new-fact", "hestia must never add memories")
+            else:
+                self.index("tabs", "nowhere")
+            result = hestia.dream_check(plan["backup"])[0]
+            self.assertTrue(result["rolled_back"], damage)
+            self.assertEqual(self.snapshot(), before, damage)
+
+    def test_nothing_to_do_when_switched_off(self):
+        self.note("tabs", "indent with tabs")
+        os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        self.assertIn("CLAUDE_CODE_DISABLE_AUTO_MEMORY", hestia.dream_plan()["skipped"])
+        del os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"]
+        hestia.write_json(self.tmp / "claude" / "settings.json", {"autoMemoryEnabled": False})
+        self.assertIn("settings", hestia.dream_plan()["skipped"])
+        (self.tmp / "claude" / "settings.json").unlink()
+        hestia.init_write({"dream": False}, str(self.tmp), [])
+        self.assertIn("/hestia:init", hestia.dream_plan()["skipped"])
+        self.assertFalse((self.home / "backups" / "memory").exists(), "nothing backed up when off")
+
+    def test_on_by_default_after_init(self):
+        hestia.init_write({}, str(self.tmp), [])
+        self.assertTrue(hestia.read_json(self.home / "profile.json")["dream"])
+
+    def test_no_memory_means_nothing_to_tidy(self):
+        self.assertEqual(hestia.dream_plan()["skipped"], "no memory to tidy")
 
 
 class TestEverythingUsesTheLauncher(unittest.TestCase):
