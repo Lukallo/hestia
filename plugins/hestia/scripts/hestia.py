@@ -11,7 +11,7 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
     hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
     hestia.py connector NAME [--present] [--set allowed|declined]
-    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
+    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page; off with no screen
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py prompt-submit   # UserPromptSubmit hook, the same handover for a window left open
@@ -53,11 +53,26 @@ CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/C
 NEW_MAX_RELEASES = 10
 NEW_MAX_CHANGES = 150
 
-# Bash commands matching this are always allowed while paused, otherwise the
-# pause would block the only command that lifts it.
+# The tools Claude Code runs shell commands with. PowerShell is the one it uses
+# on Windows when Git Bash isn't installed.
+SHELL_TOOLS = ("Bash", "PowerShell")
+
+# A shell command matching this is always allowed while paused, otherwise the
+# pause would block the only command that lifts it. It has to be the whole
+# command: one hestia call, with an optional interpreter in front (python,
+# or sh for the launcher the commands use).
 RESUME_PATTERN = re.compile(
-    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b"
+    r"""^
+    (?:(?:"[^"]*(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)"|(?:[^\s"']*[/\\])?(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)|py(?:\s+-3(?:\.\d+)?)?)\s+)?
+    (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
+    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b
+    """,
+    re.X | re.I,
 )
+
+# Anything that could run a second command never counts as the way back in:
+# chaining, pipes, redirects, subshells and new lines.
+SHELL_JOINERS = re.compile(r"[;&|`\n\r<>]|\$\(")
 
 
 # --------------------------------------------------------------------------
@@ -77,11 +92,12 @@ def load_config():
         "resume_hour": DEFAULT_RESUME_HOUR,
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
+        "screen": None,  # set by init; None means guess with has_screen()
     }
     path = hestia_home() / "config.json"
     if path.exists():
         try:
-            cfg.update(json.loads(path.read_text()))
+            cfg.update(json.loads(path.read_text(encoding="utf-8")))
         except (ValueError, OSError):
             pass
     return cfg
@@ -89,7 +105,7 @@ def load_config():
 
 def read_json(path, default=None):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return default
 
@@ -97,7 +113,7 @@ def read_json(path, default=None):
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +373,17 @@ def snapshot_repo(repo, ref, message):
     return info
 
 
+def restore_line(repo, ref):
+    """The one command that brings saved work back.
+
+    Forward slashes and POSIX quoting keep it pasteable into bash, zsh, Git
+    Bash and PowerShell, including Windows paths and folders with spaces.
+    """
+    import shlex
+
+    return "git -C %s checkout %s -- ." % (shlex.quote(Path(repo).as_posix()), ref)
+
+
 # --------------------------------------------------------------------------
 # running agents
 # --------------------------------------------------------------------------
@@ -606,9 +633,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
                     "" if snap["dirty_files"] == 1 else "s",
                 )
             )
-            lines.append(
-                "  `git -C %s checkout %s -- .`" % (snap["repo"], snap["ref"])
-            )
+            lines.append("  `%s`" % restore_line(snap["repo"], snap["ref"]))
             last = git(snap["repo"], ["log", "-1", "--format=%s"])
             if last.ok and last.out:
                 lines.append("  last commit: %s" % _one_line(last.out, 120))
@@ -686,7 +711,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
 
     path = hestia_home() / "TOMORROW.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
@@ -809,7 +834,7 @@ def cmd_resume(args):
         # doesn't hand the same list over a second time.
         due = handover_due(tomorrow)
         if due and claim_handover(due, via="back"):
-            first = start_here(tomorrow.read_text())
+            first = start_here(tomorrow.read_text(encoding="utf-8", errors="replace"))
             if first:
                 print("Start here: %s" % first)
             fact = overnight_fact(due)
@@ -864,7 +889,7 @@ def cmd_break(args):
                 {
                     "repo": s["repo"],
                     "ref": s["ref"],
-                    "restore": "git -C %s checkout %s -- ." % (s["repo"], s["ref"]),
+                    "restore": restore_line(s["repo"], s["ref"]),
                 }
                 for s in saved
             ],
@@ -1251,11 +1276,11 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     if snapshots:
         snaps = "".join(
             "<li><div>%s <small>%s</small>"
-            '<code class="snap">git -C %s checkout %s -- .</code></div></li>'
+            '<code class="snap">%s</code></div></li>'
             % (
                 _esc(Path(s["repo"]).name),
                 _esc(human(s["at"]) if s["at"] else ""),
-                _esc(s["repo"]), _esc(s["ref"]),
+                _esc(restore_line(s["repo"], s["ref"])),
             )
             for s in snapshots
         )
@@ -1313,9 +1338,24 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     }
 
 
+def has_screen():
+    """A guess: would a page opened here reach a screen someone is looking at?"""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False  # over SSH even a Mac would open it on its own screen, not yours
+    return sys.platform == "darwin" or os.name == "nt"
+
+
 def cmd_dashboard(args):
-    now = datetime.now().astimezone()
     cfg = load_config()
+    if cfg.get("screen") is False:
+        # The user told init there is no screen here, so there is no page to open.
+        print("No dashboard on this computer: it has no screen. /hestia:today gives the same reading.")
+        print("To change that, run /hestia:init again.")
+        return 0
+
+    now = datetime.now().astimezone()
     pause = read_pause(now)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     prompts = read_prompts(start_of_day)
@@ -1323,18 +1363,33 @@ def cmd_dashboard(args):
     snapshots = list_snapshots(discover_repos(prompts, cfg))
 
     tomorrow_path = hestia_home() / "TOMORROW.md"
-    tomorrow_text = tomorrow_path.read_text() if tomorrow_path.exists() else ""
+    tomorrow_text = tomorrow_path.read_text(encoding="utf-8", errors="replace") if tomorrow_path.exists() else ""
 
     out = Path(args.out) if args.out else hestia_home() / "dashboard.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text), encoding="utf-8")
     print("Dashboard: %s" % out)
 
-    if not args.no_open:
+    # Without an answer from init, only open a browser where there's a display.
+    # On a server it would do nothing, or start a text browser and hang.
+    if not args.no_open and (cfg.get("screen") is True or has_screen()):
         import webbrowser
 
         webbrowser.open(out.resolve().as_uri())
     return 0
+
+
+def is_way_back_in(tool, tool_input):
+    """True only for a single shell command that lifts the pause or reads it."""
+    if tool not in SHELL_TOOLS:
+        return False
+    command = str(tool_input.get("command") or "").strip()
+    command = re.sub(r"\s*2>&1\s*$", "", command)  # folding stderr in runs nothing new
+    if command.startswith("&"):  # PowerShell's call operator
+        command = command[1:].lstrip()
+    if SHELL_JOINERS.search(command):
+        return False
+    return bool(RESUME_PATTERN.match(command))
 
 
 def cmd_hook(args):
@@ -1352,11 +1407,9 @@ def cmd_hook(args):
     tool = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
 
-    # Never block the way back in. On Windows, Claude may run it in PowerShell.
-    if tool in ("Bash", "PowerShell"):
-        command = str(tool_input.get("command") or "")
-        if RESUME_PATTERN.search(command):
-            return 0
+    # Never block the way back in.
+    if is_way_back_in(tool, tool_input):
+        return 0
 
     if pause.get("kind") == "break":
         reason = "%s Run /hestia:back to end it early." % pause_line(pause)
@@ -1616,7 +1669,7 @@ def _deliver_handover(event):
         return 0
     if session_is_headless():
         return 0  # leave it for the person
-    text = tomorrow.read_text().strip()
+    text = tomorrow.read_text(encoding="utf-8", errors="replace").strip()
     if not text:
         return 0
     if not claim_handover(due, via=event, session=str(payload.get("session_id") or ""),
@@ -1695,7 +1748,7 @@ def last_note():
     """The note from the most recent `done`, if the list is still there."""
     tomorrow = hestia_home() / "TOMORROW.md"
     try:
-        for line in tomorrow.read_text().splitlines():
+        for line in tomorrow.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("> "):
                 return line[2:].strip()
     except OSError:
@@ -2081,6 +2134,7 @@ def detect_environment(cwd, seen=(), now=None):
             "has_hestia_section": SECTION_START in md_text,
         },
         "config": load_config(),
+        "has_screen": has_screen(),
         "profile": read_json(profile_path()),
         "connectors": detect_connectors(cwd, seen),
         "consent": {
@@ -2198,6 +2252,8 @@ def _clean_answers(raw):
     days = raw.get("working_days")
     if isinstance(days, list) and days and all(isinstance(d, int) and 0 <= d <= 6 for d in days):
         answers["working_days"] = sorted(set(days))
+    if isinstance(raw.get("screen"), bool):
+        answers["screen"] = raw["screen"]
     consent = raw.get("connectors") or {}
     answers["connectors"] = {
         connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
@@ -2222,7 +2278,7 @@ def init_write(answers, cwd, seen=(), now=None):
 
     config_file = hestia_home() / "config.json"
     raw_config = read_json(config_file) or {}
-    for field in ("resume_hour", "working_days"):
+    for field in ("resume_hour", "working_days", "screen"):
         if field in answers:
             raw_config[field] = answers[field]
     write_json(config_file, raw_config)
@@ -2302,6 +2358,7 @@ def cmd_init(args):
     print("Usual day: %s" % ("%s to %s, over %d days" % (hours["usual_start"], hours["usual_end"], hours["days_seen"])
                              if hours else "no history yet"))
     print("Connectors: %s" % (", ".join(sorted(detected["connectors"])) or "none found"))
+    print("Screen: %s" % ("yes" if detected["has_screen"] else "none found"))
     print("CLAUDE.md: %s" % ("has a Hestia section" if detected["claude_md"]["has_hestia_section"]
                              else "exists" if detected["claude_md"]["exists"] else "not created yet"))
     return 0
@@ -2380,9 +2437,12 @@ def cmd_selftest(args):
         checks.append((name, ok, detail))
         print("%s %s%s" % ("PASS" if ok else "FAIL", name, (" - " + detail) if detail else ""))
 
+    # A space and text no single code page holds, as real names and notes have.
+    note = "selftest: Łukasz’s café ☕"
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        repo = tmp / "repo"
+        repo = tmp / "my repo"
         repo.mkdir()
         home = tmp / "home"
         logs = tmp / "logs"
@@ -2431,7 +2491,7 @@ def cmd_selftest(args):
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
         # --keep-agents: the selftest must never touch real processes.
-        proc = run(["done", "--note", "selftest", "--next", "rerun the selftest", "--keep-agents", "--json"])
+        proc = run(["done", "--note", note, "--next", "rerun the selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
         check("done runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
@@ -2467,6 +2527,28 @@ def cmd_selftest(args):
         )
         check("hook always allows back", decision == "allow")
 
+        decision = _hook_decision(
+            script, {"tool_name": "PowerShell", "tool_input": {"command": 'python "C:\\hestia\\hestia.py" back'}}, env
+        )
+        check("hook allows back from PowerShell", decision == "allow")
+
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back'}}, env
+        )
+        check("hook allows back through the launcher", decision == "allow")
+
+        # Only the whole command gets through: nothing can ride along with it.
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py back && npm test"}}, env
+        )
+        check("hook blocks work chained after back", decision == "deny")
+
+        # Connectors and other plugins' tools are paused like any other tool.
+        decision = _hook_decision(
+            script, {"tool_name": "mcp__claude_ai_Slack__slack_send_message", "tool_input": {"text": "hi"}}, env
+        )
+        check("hook blocks connector tools while paused", decision == "deny")
+
         # The morning handover: not while paused, once afterwards, then silent.
         def handover(event="session-start", kind="interactive"):
             got = subprocess.run(
@@ -2492,6 +2574,7 @@ def cmd_selftest(args):
         first = handover("prompt-submit")
         check("a window left open gets it on its next prompt", "Where you left off" in first)
         check("handover carries the note", "selftest" in first)
+        check("non-ASCII text survives the night", note in first)
         check("handover leads with where to start", "Start here" in first and "rerun the selftest" in first)
         check("handover says what ran overnight", "Overnight: nothing ran" in first)
         check("handover happens only once", handover() == "" and handover("prompt-submit") == "")
@@ -2548,6 +2631,18 @@ def cmd_selftest(args):
               and (home / "handover.json").read_bytes() == handover_before)
         back = run(["back"]).stdout.decode()
         check("back ends a break early", "On a break since" in back and "Before the break" in back)
+
+        # The restore line is valid shell, even with a space in the path.
+        import shlex
+
+        restore = shlex.split(back.partition("Before the break: ")[2].strip())
+        rungit(["checkout", "--", "."])
+        (repo / "scratch.txt").unlink()
+        if restore:
+            subprocess.run(restore, cwd=str(tmp), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        check("restore line brings the work back",
+              (repo / "scratch.txt").exists()
+              and (repo / "README.md").read_text(encoding="utf-8") == "committed and then edited\n")
         write_target.write_text(json.dumps({"kind": "break", "until": past}))
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("break lifts itself", decision == "allow")
@@ -2576,7 +2671,8 @@ def cmd_selftest(args):
         claude_md.parent.mkdir()
         original = b"# My notes\r\nKeep these exactly.\r\n"
         claude_md.write_bytes(original)
-        answers = {"why": "making things people use", "tone": "plain", "connectors": {"Google_Calendar": "allowed"}}
+        answers = {"why": "making things people use", "tone": "plain", "screen": False,
+                   "connectors": {"Google_Calendar": "allowed"}}
         proc = run(["init", "write", "--seen", "Google_Calendar", "--answers", json.dumps(answers)])
         written = all((home / name).exists() for name in ("profile.json", "config.json", "connectors.json"))
         check("init writes profile, config and connectors", proc.returncode == 0 and written,
@@ -2584,6 +2680,10 @@ def cmd_selftest(args):
         text = claude_md.read_bytes()
         check("init keeps CLAUDE.md outside its markers", text.startswith(original)
               and SECTION_START.encode() in text and b"making things people use" in text)
+        proc = run(["dashboard", "--no-open"])  # never a real browser, even if this breaks
+        check("no dashboard on a computer with no screen",
+              proc.returncode == 0 and "/hestia:today" in proc.stdout.decode()
+              and not (home / "dashboard.html").exists())
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 
@@ -2596,6 +2696,12 @@ def cmd_selftest(args):
 # --------------------------------------------------------------------------
 
 def main(argv=None):
+    # Claude Code reads hooks and commands as UTF-8 on every OS. Left alone,
+    # Windows uses its ANSI code page here and crashes on names like Łukasz.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(prog="hestia", description="End the working day in Claude Code.")
     sub = parser.add_subparsers(dest="command")
 
@@ -2645,7 +2751,7 @@ def main(argv=None):
     p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
     p.set_defaults(func=cmd_connector)
 
-    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
+    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it (off with no screen)")
     p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
     p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
     p.set_defaults(func=cmd_dashboard)
