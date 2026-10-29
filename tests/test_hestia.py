@@ -829,6 +829,15 @@ class TestInitWrite(TempHome):
         profile = hestia.read_json(self.home / "profile.json")
         self.assertEqual((profile["why"], profile["tone"]), ("the craft itself", "detail"))
 
+    def test_the_screen_answer_is_kept_until_changed(self):
+        self.assertIsNone(hestia.load_config()["screen"], "unanswered until init asks")
+        self.write({"screen": False})
+        self.write({"why": "the craft itself"})  # skipped this time
+        self.write({"screen": "no"})  # not a yes or no, so ignored
+        self.assertIs(hestia.load_config()["screen"], False)
+        self.write({"screen": True})
+        self.assertIs(hestia.load_config()["screen"], True)
+
 
 class TestConnectorGate(TempHome):
     def gate(self, name, present=False, set_to=None):
@@ -919,6 +928,54 @@ class TestDashboard(TempHome):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
         self.assertFalse((self.home / "TOMORROW.md").exists())
+
+    def dashboard(self, **env_changes):
+        """Run the real CLI with a stand-in browser that only leaves a marker."""
+        browser = self.tmp / "browser.sh"
+        browser.write_text('#!/bin/sh\necho "$1" > "%s"\n' % (self.tmp / "opened"))
+        browser.chmod(0o755)
+        env = dict(os.environ, BROWSER=str(browser))
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            env.pop(name, None)
+        env.update(env_changes)
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "dashboard"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        marker = self.tmp / "opened"
+        opened = marker.exists()
+        if opened:
+            marker.unlink()
+        return proc.stdout.decode(), opened
+
+    def test_guesses_the_screen_from_the_display(self):
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            os.environ.pop(name, None)
+        os.environ["SSH_CONNECTION"] = "10.0.0.1 50000 10.0.0.2 22"
+        self.assertFalse(hestia.has_screen(), "a remote login opens nothing you can see")
+        os.environ["DISPLAY"] = ":0"
+        self.assertTrue(hestia.has_screen(), "a forwarded display can show a page")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_opens_a_browser_only_where_there_is_a_screen(self):
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertIn("Dashboard:", out)
+        self.assertFalse(opened, "no screen: write the page, open nothing")
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertTrue(opened)
+        hestia.write_json(self.home / "config.json", {"screen": True})
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertTrue(opened, "the answer from init beats the guess")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_off_when_init_says_there_is_no_screen(self):
+        hestia.write_json(self.home / "config.json", {"screen": False})
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertIn("No dashboard on this computer", out)
+        self.assertIn("/hestia:today", out)
+        self.assertFalse(opened)
+        self.assertFalse((self.home / "dashboard.html").exists(), "writes nothing at all")
 
 
 if __name__ == "__main__":

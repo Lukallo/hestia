@@ -77,7 +77,7 @@ someone's work.
 | `/hestia:back` | `back` | deletes `pause.json` | After a break it prints restore lines; after `done` it points to the list |
 | `/hestia:today` | `today` | nothing | Only ever shown when asked |
 | `/hestia:init [remove]` | `init detect`, `init write`, `init remove`, `connector` | `profile.json`, `config.json`, `connectors.json`, `backups/`, and a marked section of `~/.claude/CLAUDE.md` | Run once. Never touches text outside its markers. `connector NAME` is the consent gate: exit 0 allowed, 10 ask once, 1 skip silently |
-| `/hestia:dashboard` | `dashboard` | `dashboard.html` only | The `today` reading as one static page: no scripts, no network, no refresh. Allowed while paused because it only reads |
+| `/hestia:dashboard` | `dashboard` | `dashboard.html` only, and nothing when `screen` is `false` | The `today` reading as one static page: no scripts, no network, no refresh. Allowed while paused because it only reads. Off when `init` was told there's no screen. With no answer, it only opens a browser if `has_screen()` finds a display |
 | `/hestia:why [who for]` | `why --json` | nothing | Facts only; Claude writes the paragraph |
 | `/hestia:new` | `new --json` | `digest.json` | The only network use; offline means "nothing to do" |
 
@@ -100,7 +100,7 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
 | `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `profile.json`, `connectors.json` | The answers and connector consent from `init` | Rewritten by `init`; `init remove` takes the CLAUDE.md section out |
-| `config.json` | `{resume_hour, working_days (Mon=0), repos}` | Optional; only the user creates it |
+| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen}`. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
 
 Snapshots live in each repo as `refs/hestia/<YYYY-MM-DD-HHMMSS>`. They are
 plain commits whose parent is `HEAD`. They are never on a branch.
@@ -331,4 +331,5 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | A scripted run got the list | The hook couldn't tell it was headless: its Claude Code passed neither `CLAUDE_CODE_SESSION_ATTENDED` nor `CLAUDE_CODE_ENTRYPOINT`, and its process flags had no `--print`. Set `HESTIA_SESSION_KIND=headless` in that job's environment |
 | `why` shows no commits for a repo with commits today | They were authored under a different identity from the one `git var GIT_AUTHOR_IDENT` reports there |
 | `new` always says nothing changed | `digest.json` already records the newest version. Delete it, or pass `--since` |
+| `dashboard` says there's no dashboard on this computer | `config.json` has `"screen": false`, from `init`. Re-run `init`, or delete that key |
 | The selftest fails only on `why` | The commit identity differs from the git identity. The selftest sets `GIT_AUTHOR_EMAIL`; check nothing in your environment overrides it |

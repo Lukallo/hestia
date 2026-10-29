@@ -11,7 +11,7 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
     hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
     hestia.py connector NAME [--present] [--set allowed|declined]
-    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
+    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page; off with no screen
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py prompt-submit   # UserPromptSubmit hook, the same handover for a window left open
@@ -77,6 +77,7 @@ def load_config():
         "resume_hour": DEFAULT_RESUME_HOUR,
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
+        "screen": None,  # set by init; None means guess with has_screen()
     }
     path = hestia_home() / "config.json"
     if path.exists():
@@ -1197,9 +1198,24 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     }
 
 
+def has_screen():
+    """A guess: would a page opened here reach a screen someone is looking at?"""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False  # over SSH even a Mac would open it on its own screen, not yours
+    return sys.platform == "darwin" or os.name == "nt"
+
+
 def cmd_dashboard(args):
-    now = datetime.now().astimezone()
     cfg = load_config()
+    if cfg.get("screen") is False:
+        # The user told init there is no screen here, so there is no page to open.
+        print("No dashboard on this computer: it has no screen. /hestia:today gives the same reading.")
+        print("To change that, run /hestia:init again.")
+        return 0
+
+    now = datetime.now().astimezone()
     pause = read_pause(now)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     prompts = read_prompts(start_of_day)
@@ -1214,7 +1230,9 @@ def cmd_dashboard(args):
     out.write_text(render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text), encoding="utf-8")
     print("Dashboard: %s" % out)
 
-    if not args.no_open:
+    # Without an answer from init, only open a browser where there's a display.
+    # On a server it would do nothing, or start a text browser and hang.
+    if not args.no_open and (cfg.get("screen") is True or has_screen()):
         import webbrowser
 
         webbrowser.open(out.resolve().as_uri())
@@ -1965,6 +1983,7 @@ def detect_environment(cwd, seen=(), now=None):
             "has_hestia_section": SECTION_START in md_text,
         },
         "config": load_config(),
+        "has_screen": has_screen(),
         "profile": read_json(profile_path()),
         "connectors": detect_connectors(cwd, seen),
         "consent": {
@@ -2082,6 +2101,8 @@ def _clean_answers(raw):
     days = raw.get("working_days")
     if isinstance(days, list) and days and all(isinstance(d, int) and 0 <= d <= 6 for d in days):
         answers["working_days"] = sorted(set(days))
+    if isinstance(raw.get("screen"), bool):
+        answers["screen"] = raw["screen"]
     consent = raw.get("connectors") or {}
     answers["connectors"] = {
         connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
@@ -2106,7 +2127,7 @@ def init_write(answers, cwd, seen=(), now=None):
 
     config_file = hestia_home() / "config.json"
     raw_config = read_json(config_file) or {}
-    for field in ("resume_hour", "working_days"):
+    for field in ("resume_hour", "working_days", "screen"):
         if field in answers:
             raw_config[field] = answers[field]
     write_json(config_file, raw_config)
@@ -2186,6 +2207,7 @@ def cmd_init(args):
     print("Usual day: %s" % ("%s to %s, over %d days" % (hours["usual_start"], hours["usual_end"], hours["days_seen"])
                              if hours else "no history yet"))
     print("Connectors: %s" % (", ".join(sorted(detected["connectors"])) or "none found"))
+    print("Screen: %s" % ("yes" if detected["has_screen"] else "none found"))
     print("CLAUDE.md: %s" % ("has a Hestia section" if detected["claude_md"]["has_hestia_section"]
                              else "exists" if detected["claude_md"]["exists"] else "not created yet"))
     return 0
@@ -2460,7 +2482,8 @@ def cmd_selftest(args):
         claude_md.parent.mkdir()
         original = b"# My notes\r\nKeep these exactly.\r\n"
         claude_md.write_bytes(original)
-        answers = {"why": "making things people use", "tone": "plain", "connectors": {"Google_Calendar": "allowed"}}
+        answers = {"why": "making things people use", "tone": "plain", "screen": False,
+                   "connectors": {"Google_Calendar": "allowed"}}
         proc = run(["init", "write", "--seen", "Google_Calendar", "--answers", json.dumps(answers)])
         written = all((home / name).exists() for name in ("profile.json", "config.json", "connectors.json"))
         check("init writes profile, config and connectors", proc.returncode == 0 and written,
@@ -2468,6 +2491,10 @@ def cmd_selftest(args):
         text = claude_md.read_bytes()
         check("init keeps CLAUDE.md outside its markers", text.startswith(original)
               and SECTION_START.encode() in text and b"making things people use" in text)
+        proc = run(["dashboard", "--no-open"])  # never a real browser, even if this breaks
+        check("no dashboard on a computer with no screen",
+              proc.returncode == 0 and "/hestia:today" in proc.stdout.decode()
+              and not (home / "dashboard.html").exists())
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 
@@ -2529,7 +2556,7 @@ def main(argv=None):
     p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
     p.set_defaults(func=cmd_connector)
 
-    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
+    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it (off with no screen)")
     p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
     p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
     p.set_defaults(func=cmd_dashboard)

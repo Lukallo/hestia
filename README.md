@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `32/32 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `38/38 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -68,7 +68,7 @@ That's it. You get:
 ├── digest.json     the last Claude Code version /hestia:new told you about
 ├── profile.json    your answers from /hestia:init
 ├── connectors.json which connectors Hestia may use, asked once each
-└── config.json     your working days and resume hour
+└── config.json     your working days, resume hour and whether there's a screen
 
 ~/.claude/CLAUDE.md
 └── a short "Hestia: about me" section, between its own markers
@@ -128,12 +128,12 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 | | Command | What happens |
 |---|---|---|
-| <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
+| <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. If this computer seems to have no screen, it asks about that too. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
 | <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list starting with the first thing to do, and pauses Claude until the next working morning |
 | <img src="assets/icons/rest.svg" width="40" alt="Rest: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list, because the day isn't over |
 | <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and tells you where to start and what ran while you were away |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused or on a break, and today's load, only ever when you ask |
-| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes. Off if you told `/hestia:init` there's no screen |
 | <img src="assets/icons/home.svg" width="40" alt="Home: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, built from your real commits and prompts. Paste it into an update instead of writing one |
 | <img src="assets/icons/kindling.svg" width="40" alt="Kindling: one new thing, not the woodpile"> | `/hestia:new` | Reads only what changed in Claude Code since your version or your last check, and shows you **one** thing from it, in five lines |
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 37 checks, 77 tests
+## Prove it: 38 checks, 81 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -412,21 +412,22 @@ PASS new is quiet when nothing changed
 PASS new degrades cleanly offline
 PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
+PASS no dashboard on a computer with no screen
 PASS init remove restores CLAUDE.md exactly
 
-37/37 checks passed
+38/38 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 77 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 81 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 77 tests in 7.450s
+Ran 81 tests in 10.383s
 
 OK
 ```
@@ -459,6 +460,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 | The morning list didn't appear | The session was resumed with `--continue`, the pause hadn't ended yet, or the list was already handed over. Delete `~/.hestia/handover.json` to get it again |
 | `/hestia:why` shows no commits for a repo you committed to today | The commits were made under a different git identity from the one that repo uses now |
 | `/hestia:new` always says nothing changed | `~/.hestia/digest.json` already has the newest version. Delete it to see the changes again |
+| `/hestia:dashboard` says there's no dashboard on this computer | You told `/hestia:init` it has no screen. Run `/hestia:init` again and pick "It has a screen" |
 | Commands fail with `python3: command not found` | Install Python 3. On Windows the command is usually `python`, see the limitations below |
 
 ## Honest limitations
@@ -480,6 +482,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
+- `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
 - Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
 - We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
 - Developed on macOS and Linux. The selftest and unit tests also pass on Windows 11 with Python 3.13, but the plugin hasn't been run end to end inside Claude Code on Windows. The hooks invoke `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json` accordingly.
@@ -511,7 +514,7 @@ python3 plugins/hestia/scripts/hestia.py new
 </details>
 
 <details>
-<summary><b>Config: resume hour, working days, extra repos</b></summary>
+<summary><b>Config: resume hour, working days, extra repos, screen</b></summary>
 
 Optional, at `~/.hestia/config.json`:
 
@@ -519,11 +522,14 @@ Optional, at `~/.hestia/config.json`:
 {
   "resume_hour": 8,
   "working_days": [0, 1, 2, 3, 4],
-  "repos": ["/Users/you/code/side-project"]
+  "repos": ["/Users/you/code/side-project"],
+  "screen": true
 }
 ```
 
 `working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning.
+
+`screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 
 </details>
 
