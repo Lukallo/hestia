@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 37 checks, 84 tests
+## Prove it: 37 checks, 85 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -419,14 +419,14 @@ PASS init remove restores CLAUDE.md exactly
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 84 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 85 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 84 tests in 18.747s
+Ran 85 tests in 22.896s
 
 OK (skipped=4)
 ```
