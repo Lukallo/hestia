@@ -21,9 +21,12 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 
 Environment overrides (used by the tests and selftest):
     HESTIA_HOME           state directory, default ~/.hestia
-    HESTIA_LOG_DIR        Claude Code project logs, default ~/.claude/projects
-    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
+    HESTIA_LOG_DIR        Claude Code project logs, default <claude dir>/projects
+    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default <claude dir>
     HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
+                          (<claude dir>/.claude.json when CLAUDE_CONFIG_DIR is set)
+
+<claude dir> is $CLAUDE_CONFIG_DIR when Claude Code was started with it, else ~/.claude.
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
     HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
 """
@@ -86,8 +89,21 @@ def hestia_home():
     return Path(os.environ.get("HESTIA_HOME") or (Path.home() / ".hestia"))
 
 
+def claude_config_dir():
+    """Where Claude Code keeps its own files: CLAUDE_CONFIG_DIR, or ~/.claude.
+
+    People who run more than one Claude Code account set CLAUDE_CONFIG_DIR.
+    Claude Code then keeps the session logs, CLAUDE.md and .claude.json in
+    that folder, and passes the variable on to hooks.
+    """
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured).expanduser() if configured else None
+
+
 def log_dir():
-    return Path(os.environ.get("HESTIA_LOG_DIR") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_LOG_DIR"):
+        return Path(os.environ["HESTIA_LOG_DIR"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def load_config():
@@ -1875,11 +1891,16 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def claude_dir():
-    return Path(os.environ.get("HESTIA_CLAUDE_DIR") or (Path.home() / ".claude"))
+    if os.environ.get("HESTIA_CLAUDE_DIR"):
+        return Path(os.environ["HESTIA_CLAUDE_DIR"])
+    return claude_config_dir() or Path.home() / ".claude"
 
 
 def claude_json_path():
-    return Path(os.environ.get("HESTIA_CLAUDE_JSON") or (Path.home() / ".claude.json"))
+    if os.environ.get("HESTIA_CLAUDE_JSON"):
+        return Path(os.environ["HESTIA_CLAUDE_JSON"])
+    config = claude_config_dir()
+    return config / ".claude.json" if config else Path.home() / ".claude.json"
 
 
 def claude_md_path():
