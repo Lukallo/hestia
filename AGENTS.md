@@ -112,6 +112,10 @@ plain commits whose parent is `HEAD`. They are never on a branch.
 ### Data sources
 
 - **Prompts** come from `~/.claude/projects/*/*.jsonl`, or `$HESTIA_LOG_DIR`.
+  When Claude Code runs with `CLAUDE_CONFIG_DIR`, the logs, auto memory,
+  `CLAUDE.md`, `settings.json` and `.claude.json` all live in that folder
+  instead, and Hestia follows it.
+  The `HESTIA_*` overrides still win.
   Only `type == "user"` entries with string content count. Sidechains,
   tool results and anything starting with `<` are skipped.
 - **Repos** are found from the `cwd` of today's prompts, the current folder
@@ -271,6 +275,19 @@ it. Keep it efficient:
 - **Never edit it from anywhere else.** If a new command changes how Claude
   should behave, change the renderer, add a test, and the next `init` rewrites
   the section. Outside the markers stays byte-identical (see the invariants).
+
+### Ship it to people who already installed
+
+Claude Code only updates an installed plugin when its version number
+changes. If anything under `plugins/hestia/` changes and the version stays
+the same, `claude plugin update hestia@hestia` says "already at the latest
+version" and keeps the old hooks and scripts.
+
+So bump `version` in `plugins/hestia/.claude-plugin/plugin.json` and
+`metadata.version` in `.claude-plugin/marketplace.json` together, in the PR
+that changes the plugin, or in one PR just before a release. A fresh install
+always gets the latest files whatever the number says. The bump is for
+everyone else.
 
 ### Add a command
 
