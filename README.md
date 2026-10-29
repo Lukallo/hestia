@@ -25,14 +25,28 @@ People who build with Claude Code every day and find it hard to stop. AI removed
 
 ## Install
 
-In Claude Code:
+Needs `git` and Python 3 (`python3` or `python`), nothing else; on Windows, Git for Windows.
+
+**1. Install**, in Claude Code:
 
 ```text
 /plugin marketplace add Lukallo/hestia
 /plugin install hestia@hestia
 ```
 
-Needs `git` and Python 3 (`python3` or `python`), nothing else; on Windows, Git for Windows. Then run `/hestia:init` once (about a minute, every question skippable).
+**2. At the end of the day**, type:
+
+```text
+/hestia:done
+```
+
+That's all you need. The first session next morning picks up where you left off.
+
+**3. Optional, once:** `/hestia:init` takes about a minute. Every question is skippable and has a default. It tells Hestia your working days and hours, and what your work is for.
+
+```text
+/hestia:init
+```
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
