@@ -205,11 +205,72 @@ class TestPauseAndHook(TempHome):
             "python3 hestia.py resume",  # old alias must still get through
             "python hestia.py status",
             "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" back',  # as back.md writes it
+            "python3 hestia.py today --json 2>&1",
+            "py -3 hestia.py back",
+            "./hestia.py back",
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
                 "allow",
                 "pause must not block: %s" % command,
+            )
+
+    def test_way_back_in_from_powershell(self):
+        # Claude Code uses a PowerShell tool on Windows without Git Bash.
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in [
+            'python "$env:CLAUDE_PLUGIN_ROOT\\scripts\\hestia.py" back',
+            '& python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
+            '& "C:\\Python314\\python.exe" "C:\\hestia\\hestia.py" today',
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": "PowerShell", "tool_input": {"command": command}}),
+                "allow",
+                "pause must not block: %s" % command,
+            )
+        self.assertEqual(
+            self.hook({"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item build"}}),
+            "deny",
+        )
+
+    def test_only_the_whole_command_gets_through(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in [
+            "python3 hestia.py today && git push",
+            "python3 hestia.py back; npm publish",
+            "python3 hestia.py status | sh",
+            "python3 hestia.py back || npm test",
+            "python3 hestia.py back & npm test",
+            "echo $(python3 hestia.py status; npm publish)",
+            "echo `python3 hestia.py back`",
+            "python3 hestia.py back\nrm -rf build",
+            "python3 hestia.py today > notes.txt",
+            'git commit -m "hestia back online" && git push',
+            'git commit -m "hestia back online"',
+            'python3 -c "import os" hestia.py back',
+            "python3 hestia.py done --keep-agents",  # not a way back in
+            "python3 hestia.py break 5m",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
+                "deny",
+                "pause must block: %s" % command,
+            )
+
+    def test_blocks_connectors_subagents_and_other_plugins(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for tool in [
+            "mcp__claude_ai_Slack__slack_send_message",  # a claude.ai connector
+            "mcp__plugin_linear_linear__create_issue",  # a plugin's own MCP server
+            "Agent",  # starting a subagent
+            "Skill",
+            "WebFetch",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": tool, "tool_input": {}}),
+                "deny",
+                "pause must block: %s" % tool,
             )
 
     def test_expired_pause_clears_itself(self):

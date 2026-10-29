@@ -47,6 +47,7 @@ correctness bug.
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
 | `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. |
+| `tests/compat/` | A live check that runs real `claude -p` sessions with Hestia, a stand-in connector (`fake_mcp.py`) and a stand-in plugin (`other/`). Not one of the three checks: it needs the `claude` CLI and costs a few cents. |
 | `README.md` | The public face, read by users and by an automated judge. Every output block in it is a real capture. |
 | `PLAN.md` | The design, the burnout research grounding, and the audit of what was cut and why. |
 | `assets/`, `assets/BRAND.md` | Banner, logo and icons, which are named by fire stage rather than by command. |
@@ -136,7 +137,10 @@ the test.
    `HEAD` stay byte-identical. The engine builds the commit through a
    temporary `GIT_INDEX_FILE`. **Never** replace this with `git stash`,
    `git add` on the real index, or a commit on the user's branch.
-2. **The pause never blocks the way back in.** `RESUME_PATTERN` in
+2. **The pause never blocks the way back in, and nothing rides along with
+   it.** `is_way_back_in()` only lets a `Bash` or `PowerShell` command
+   through when it is one hestia call on its own: `SHELL_JOINERS` refuses
+   chaining, pipes, redirects, subshells and new lines. `RESUME_PATTERN` in
    `hestia.py` allowlists `back`/`resume`, `today`/`status` and the read-only
    `dashboard`, along with the hook commands. The hook tests cover several spellings, including the old
    aliases. If you rename a command, update the pattern and those tests in
@@ -207,6 +211,12 @@ claude plugin validate .                            # Validation passed
 directory's submission checks. It currently reports a missing licence and a
 missing icon. Both are known, and choosing a licence is the maintainers'
 decision, not an agent's.
+
+When you change the hooks or the pause, also run `tests/compat/run.sh`. It
+checks that the pause holds next to a connector and another plugin, using a
+throwaway `HESTIA_HOME` for every scenario. Never run it in
+`bypassPermissions` mode, and re-capture its README block if its output
+changes.
 
 The tests need `git` and Python 3.9 or newer. They create everything in temp
 dirs and set `HESTIA_HOME` and `HESTIA_LOG_DIR` for every test.
@@ -320,6 +330,7 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | Licence | Missing. The maintainers must choose one |
 | PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
 | Remote agents | Only processes on this machine can be stopped |
+| Mods | A mod can approve a tool call the pause blocked, unless managed settings or a Team or Enterprise login is in place. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow. Documented in the README's limitations |
 
 ## 12. Troubleshooting
 

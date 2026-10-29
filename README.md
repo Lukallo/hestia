@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `38/38 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `41/41 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -147,7 +147,7 @@ Plus two things that happen on their own, and nothing else:
 The second one is the whole trick. The context you left with is given back automatically, and exactly once, because a recap on every session is just noise. Exactly once is enforced, not hoped for: the session that takes the list creates a claim file atomically, so two sessions opening in the same instant can't both get it.
 
 > [!TIP]
-> While paused or on a break, the hook blocks every tool call except the way back in. `/hestia:back` is explicitly allowlisted, so you can never lock yourself out.
+> While paused or on a break, the hook blocks every tool call except the way back in, including connector tools, subagents and other plugins' tools. `/hestia:back` is explicitly allowlisted, from Bash or PowerShell, so you can never lock yourself out. It only gets through on its own: anything chained to it, piped or run in a subshell is blocked.
 
 ### Stopping agents, carefully
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 38 checks, 81 tests
+## Prove it: 41 checks, 84 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -387,6 +387,9 @@ PASS tomorrow's list written
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
+PASS hook allows back from PowerShell
+PASS hook blocks work chained after back
+PASS hook blocks connector tools while paused
 PASS no handover while still paused
 PASS scripted runs never take the list
 PASS a window left open gets it on its next prompt
@@ -415,22 +418,46 @@ PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
 PASS init remove restores CLAUDE.md exactly
 
-38/38 checks passed
+41/41 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 81 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 84 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 81 tests in 10.383s
+Ran 84 tests in 12.591s
 
 OK
 ```
+
+### Next to other plugins and connectors
+
+Hestia's pause is a `PreToolUse` hook, and other plugins can have their own. Claude Code ranks one hook's deny above any other hook's allow, so another plugin can't approve its way past the pause. A live check runs real `claude -p` sessions with Hestia, a stand-in connector and a stand-in plugin that approves every tool call:
+
+```text
+tests/compat/run.sh
+```
+
+Real output, Claude Code 2.1.312:
+
+```text
+PASS not paused: the connector's tool runs as normal
+PASS paused: the connector's tool is blocked, though another plugin approves it
+PASS paused: a subagent can't run commands
+PASS paused: another plugin's command is blocked
+PASS paused: /hestia:back still gets you out
+PASS morning: a scripted run doesn't take the handover
+PASS morning: a person gets Hestia's handover and the other plugin's context
+
+7/7 checks passed
+```
+
+It needs the `claude` CLI and costs a few cents per run. Each scenario uses a throwaway `HESTIA_HOME`, so nothing on your machine is paused.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -478,7 +505,9 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - The handover tells a scripted run from a person using what Claude Code passes to hooks (`CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`). On versions that pass neither, it checks the launching process's flags. If it still can't tell, it assumes a person is there, because a list handed to a script is lost.
 - The overnight line is read from Claude Code's session logs. Work done outside Claude Code isn't in it.
 - `Sessions to pick up` lists sessions you typed in today, newest first, with a `claude --resume` line for each. Sessions with no prompts today aren't listed.
-- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out.
+- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out, but only as a command on its own.
+- A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
+- The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
