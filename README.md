@@ -266,7 +266,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 29 checks, 40 tests
+## Prove it: 29 checks, 43 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -312,14 +312,14 @@ PASS new degrades cleanly offline
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 40 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 43 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 40 tests in 2.234s
+Ran 43 tests in 3.802s
 
 OK
 ```

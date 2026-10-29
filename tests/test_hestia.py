@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -408,6 +409,57 @@ class TestBreak(TempHome):
             {"until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat()},
         )
         self.assertEqual(hestia.read_pause()["kind"], "done")
+
+
+class TestWithoutPs(TempHome):
+    """Windows has no `ps`. Finding agents comes back empty instead of crashing."""
+
+    def setUp(self):
+        super().setUp()
+        git_path = shutil.which("git")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        try:
+            os.symlink(git_path, str(bin_dir / os.path.basename(git_path)))
+        except (OSError, TypeError):
+            self.tearDown()  # a skip from setUp never reaches tearDown
+            self.skipTest("needs git and symlinks")
+        # git and nothing else, so `ps` is missing however this machine is set up.
+        os.environ["PATH"] = str(bin_dir)
+
+    def run_in(self, repo, command, args):
+        cwd = os.getcwd()
+        os.chdir(str(repo))
+        try:
+            return command(hestia.argparse.Namespace(**args))
+        finally:
+            os.chdir(cwd)
+
+    def test_no_ps_means_no_agents(self):
+        self.assertEqual(hestia.running_agents(), [])
+
+    def test_done_still_saves_and_pauses(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        code = self.run_in(repo, hestia.cmd_shutdown, {
+            "note": "", "until": "", "json": True,
+            "keep_agents": True,  # never touch real processes from a test
+            "stop_all": False,
+        })
+        self.assertEqual(code, 0)
+        self.assertEqual(hestia.read_pause()["kind"], "done")
+        self.assertIn("refs/hestia/", (self.home / "TOMORROW.md").read_text())
+
+    def test_break_still_saves_and_pauses(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("mid-thought\n")
+        code = self.run_in(repo, hestia.cmd_break, {
+            "length": "30m", "json": True, "stop_agents": False,
+        })
+        self.assertEqual(code, 0)
+        pause = hestia.read_pause()
+        self.assertEqual(pause["kind"], "break")
+        self.assertEqual(len(pause["saved"]), 1)
 
 
 class TestWhy(TempHome):
