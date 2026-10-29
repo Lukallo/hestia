@@ -40,7 +40,7 @@ once, and find it hard to stop.
 ## Install
 
 ```
-/plugin marketplace add Lukallo/claude-impact-lab-10-26
+/plugin marketplace add Lukallo/hestia
 /plugin install hestia@hestia
 ```
 
