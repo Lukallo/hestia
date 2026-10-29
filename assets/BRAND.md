@@ -24,6 +24,7 @@ Icons are named after the **stage of the fire**, not the command, so they surviv
 |---|---|---|
 | `banner.svg` | 960×300 | top of the README |
 | `logo.svg` | 128×128 | avatar, social preview, small placements |
+| `plugins/hestia/.claude-plugin/icon.png` | 1024×1024 | plugin directory listing; `logo.svg` rendered at rest (no flicker) on a full coal square, since the directory doesn't accept SVG |
 | `cycle.svg` | 960×330 | "how it works" diagram |
 | `meander.svg` | 960×24 | section divider (Greek key) |
 | `icons/*.svg` | 64×64 | one per command; show at 40–64 px |
