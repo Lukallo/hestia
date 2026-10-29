@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="330" viewBox="0 0 960 330" role="img" aria-labelledby="t d"><title id="t">The day, as a fire</title><desc id="d">Tend during the day, bank it with /hestia:shutdown, keep it overnight while agents are paused, relight in the morning with yesterday's list ready.</desc>
+<rect width="960" height="330" rx="24" fill="#1C1714"/>
+<g fill="none" stroke="#6B615B" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 7">
+<path d="M178 100H302"/><path d="M418 100H542"/><path d="M658 100H782"/>
+<path d="M840 236C840 304 120 304 120 236"/>
+</g>
+<g fill="#6B615B"><path d="M304 95l9 5-9 5z"/><path d="M544 95l9 5-9 5z"/><path d="M784 95l9 5-9 5z"/><path d="M115 238l5-10 5 10z"/></g>
+<g transform="translate(80 54) scale(1.25)"><rect width="64" height="64" rx="14" fill="#2A211C"/><ellipse cx="32" cy="52" rx="16" ry="3" fill="#E8743B" opacity=".25"/><path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5C29 25 29 17 32 10z" fill="#E8743B"/><path d="M32 31c2 4.5 6.5 6.5 6.5 12a6.5 6.5 0 0 1-13 0c0-3.5 2-6 3.5-8 .8 2 1.8 3 3 3.2-.2-2.5-.2-4.7 0-7.2z" fill="#F4B740"/></g>
+<g transform="translate(320 54) scale(1.25)"><rect width="64" height="64" rx="14" fill="#2A211C"/><ellipse cx="32" cy="47" rx="19" ry="4" fill="#E8743B" opacity=".35"/><path d="M11 47c1-6 5-9.5 9.5-9.5 1.5-5 6-8.5 11.5-8.5s10 3.5 11.5 8.5c4.5 0 8.5 3.5 9.5 9.5z" fill="#6B615B"/><circle cx="21" cy="46" r="2.4" fill="#E8743B"/><circle cx="32" cy="47" r="2.8" fill="#F4B740"/><circle cx="43" cy="46" r="2.4" fill="#E8743B"/><path d="M32 25c-3.5-3 3.5-6 0-10" stroke="#8A817C" stroke-width="2" fill="none" stroke-linecap="round"/></g>
+<g transform="translate(560 54) scale(1.25)"><rect width="64" height="64" rx="14" fill="#2A211C"/><circle cx="42" cy="19" r="8" fill="#F4B740"/><circle cx="46" cy="16" r="7" fill="#2A211C"/><circle cx="19" cy="14" r="1.3" fill="#F6EDE3" opacity=".7"/><circle cx="27" cy="22" r="1" fill="#F6EDE3" opacity=".5"/><ellipse cx="32" cy="50" rx="10" ry="2.5" fill="#E8743B" opacity=".3"/><g transform="translate(18 25) scale(.56)"><path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5C29 25 29 17 32 10z" fill="#C2502A"/></g><rect x="15" y="52" width="34" height="3" rx="1.5" fill="#6B615B"/></g>
+<g transform="translate(800 54) scale(1.25)"><rect width="64" height="64" rx="14" fill="#2A211C"/><path d="M18 46a14 14 0 0 1 28 0z" fill="#F4B740"/><g stroke="#F4B740" stroke-width="2.5" stroke-linecap="round"><path d="M32 18v6"/><path d="M14.5 28.5l4 4"/><path d="M49.5 28.5l-4 4"/><path d="M9 43h4"/><path d="M51 43h4"/></g><rect x="9" y="48" width="46" height="3" rx="1.5" fill="#6B615B"/><g transform="translate(25.5 33) scale(.2)"><path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5C29 25 29 17 32 10z" fill="#C2502A"/></g></g>
+<g font-family="Georgia, 'Times New Roman', serif" font-size="26" fill="#F6EDE3" text-anchor="middle"><text x="120" y="172">Tend</text><text x="360" y="172">Bank</text><text x="600" y="172">Keep</text><text x="840" y="172">Relight</text></g>
+<g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#A89E97" text-anchor="middle">
+<text x="120" y="196">your working day</text>
+<text x="360" y="196" fill="#F4B740" font-family="ui-monospace, Consolas, monospace">/hestia:shutdown</text>
+<text x="360" y="216">work saved, list written</text>
+<text x="600" y="196">agents paused overnight</text>
+<text x="840" y="196">yesterday's list, ready</text>
+</g>
+<text x="480" y="262" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="18" fill="#8A817C" text-anchor="middle">and the fire never goes out</text>
+</svg>
