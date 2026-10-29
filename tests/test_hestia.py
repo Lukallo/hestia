@@ -29,6 +29,9 @@ class TempHome(unittest.TestCase):
         self._env = dict(os.environ)
         os.environ["HESTIA_HOME"] = str(self.home)
         os.environ["HESTIA_LOG_DIR"] = str(self.logs)
+        # A person is at the session unless a test says otherwise, so the
+        # handover answers the same inside a terminal, CI or claude -p.
+        os.environ["HESTIA_SESSION_KIND"] = "interactive"
         os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "claude")
         os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "claude.json")
 
@@ -237,10 +240,12 @@ class TestAgentDetection(TempHome):
 
 
 class TestMorningHandover(TempHome):
-    def session_start(self):
+    def session_start(self, event="session-start", kind="interactive"):
         proc = subprocess.run(
-            [sys.executable, str(SCRIPTS / "hestia.py"), "session-start"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ),
+            [sys.executable, str(SCRIPTS / "hestia.py"), event],
+            input=b'{"session_id": "test", "cwd": "/tmp"}',
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=dict(os.environ, HESTIA_SESSION_KIND=kind),
         )
         self.assertEqual(proc.returncode, 0, proc.stderr.decode())
         out = proc.stdout.decode().strip()
@@ -275,6 +280,155 @@ class TestMorningHandover(TempHome):
         self.assertEqual(self.session_start(), "")
         self.write_list("# Tomorrow\n\nstart with the importer\n")
         self.assertIn("importer", self.session_start(), "a fresh shutdown re-arms it")
+
+
+    def test_a_window_left_open_gets_it_on_its_next_prompt(self):
+        self.write_list()
+        self.assertIn("start with the parser", self.session_start("prompt-submit"))
+        self.assertEqual(self.session_start("prompt-submit"), "", "once, not on every prompt")
+        self.assertEqual(self.session_start(), "", "and not again in a new session")
+
+    def test_scripted_runs_never_take_it(self):
+        self.write_list()
+        self.assertEqual(self.session_start(kind="headless"), "")
+        self.assertEqual(self.session_start("prompt-submit", kind="headless"), "")
+        self.assertIn("parser", self.session_start(), "still there for the person")
+
+    def test_headless_is_read_from_what_claude_code_tells_hooks(self):
+        for name in ("HESTIA_SESSION_KIND", "CLAUDE_CODE_SESSION_ATTENDED",
+                     "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PID"):
+            os.environ.pop(name, None)
+        os.environ["CLAUDE_CODE_SESSION_ATTENDED"] = "0"
+        self.assertTrue(hestia.session_is_headless())
+        os.environ["CLAUDE_CODE_SESSION_ATTENDED"] = "1"
+        self.assertFalse(hestia.session_is_headless())
+        os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED")
+        os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+        self.assertTrue(hestia.session_is_headless())
+        os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+        self.assertFalse(hestia.session_is_headless())
+        os.environ.pop("CLAUDE_CODE_ENTRYPOINT")
+        self.assertFalse(hestia.session_is_headless(), "unknown means a person is there")
+
+    def test_sessions_starting_together_get_it_once(self):
+        self.write_list()
+        racers = [
+            subprocess.Popen(
+                [sys.executable, str(SCRIPTS / "hestia.py"), "session-start" if i % 2 else "prompt-submit"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=dict(os.environ),
+            )
+            for i in range(12)
+        ]
+        outputs = [racer.communicate()[0].decode().strip() for racer in racers]
+        self.assertEqual(len([o for o in outputs if o]), 1)
+
+    def test_a_list_from_before_claims_existed_stays_handed_over(self):
+        self.write_list()
+        tomorrow = self.home / "TOMORROW.md"
+        hestia.write_json(self.home / "handover.json",
+                          {"for": tomorrow.stat().st_mtime, "consumed": True})
+        self.assertEqual(self.session_start(), "")
+
+    def test_again_re_arms_it(self):
+        self.write_list()
+        self.assertIn("parser", self.session_start())
+        hestia.main(["handover", "--again"])
+        self.assertIn("parser", self.session_start())
+
+    def test_normal_day_costs_nothing(self):
+        self.assertIsNone(hestia.handover_due())
+        self.assertEqual(self.session_start("prompt-submit"), "")
+
+
+class TestOvernightFact(TempHome):
+    def log(self, entries):
+        project = self.logs / "-tmp-proj"
+        project.mkdir(exist_ok=True)
+        with (project / "night.jsonl").open("a") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry) + "\n")
+
+    def tool_use(self, when, use_id, command="npm test"):
+        return {"type": "assistant", "timestamp": when.isoformat(), "cwd": "/tmp/proj",
+                "message": {"content": [{"type": "tool_use", "id": use_id, "name": "Bash",
+                                         "input": {"command": command}}]}}
+
+    def denied(self, when, use_id):
+        return {"type": "user", "timestamp": when.isoformat(),
+                "message": {"content": [{"type": "tool_result", "tool_use_id": use_id, "is_error": True,
+                                         "content": "Clocked out until Fri 30 Oct 08:00."}]}}
+
+    def setUp(self):
+        super().setUp()
+        self.since = datetime.now().astimezone() - timedelta(hours=10)
+        self.due = {"since": self.since.isoformat()}
+
+    def test_nothing_ran(self):
+        fact = hestia.overnight_fact(self.due)
+        self.assertTrue(fact.startswith("Overnight: nothing ran between"), fact)
+
+    def test_blocked_calls_are_the_pause_working(self):
+        at = self.since + timedelta(hours=3)
+        self.log([self.tool_use(at, "a"), self.denied(at, "a")])
+        fact = hestia.overnight_fact(self.due)
+        self.assertIn("nothing ran", fact)
+        self.assertIn("The pause blocked 1 tool call.", fact)
+
+    def test_work_that_ran_is_reported_plainly(self):
+        at = self.since + timedelta(hours=4)
+        self.log([self.tool_use(at, "b")])
+        fact = hestia.overnight_fact(self.due)
+        self.assertIn("1 tool call ran", fact)
+        self.assertIn(at.strftime("%H:%M"), fact)
+
+    def test_coming_back_is_not_work(self):
+        at = self.since + timedelta(hours=1)
+        self.log([self.tool_use(at, "c", command='python3 "/x/hestia.py" back')])
+        self.assertIn("nothing ran", hestia.overnight_fact(self.due))
+
+    def test_before_shutdown_does_not_count(self):
+        self.log([self.tool_use(self.since - timedelta(minutes=5), "d")])
+        self.assertIn("nothing ran", hestia.overnight_fact(self.due))
+
+
+class TestTheListCarriesTheThread(TempHome):
+    def test_start_here_sessions_and_last_commit(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        now = datetime.now().astimezone()
+        snap = hestia.snapshot_repo(repo, "refs/hestia/t", "t")
+        prompts = [
+            {"at": now - timedelta(hours=2), "cwd": str(repo), "branch": "main",
+             "text": "add the parser", "session": "sess-old"},
+            {"at": now - timedelta(minutes=5), "cwd": str(repo), "branch": "main",
+             "text": "make the importer accept semicolons", "session": "sess-new"},
+        ]
+        load = hestia.day_load(prompts)
+        path = hestia.write_tomorrow(now, "for the ops team", [snap], load, prompts,
+                                     next_step="finish the semicolon importer test")
+        text = path.read_text()
+        self.assertEqual(hestia.start_here(text), "finish the semicolon importer test")
+        self.assertLess(text.index("## Start here"), text.index("## Where you left off"))
+        self.assertIn("last commit: first", text)
+        self.assertIn("claude --resume sess-new", text)
+        self.assertLess(text.index("sess-new"), text.index("sess-old"), "newest session first")
+
+    def test_back_takes_the_handover_and_says_where_to_start(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "TOMORROW.md").write_text("# Tomorrow\n\n## Start here\n\n- rerun the importer\n")
+        an_hour_ago = datetime.now().astimezone() - timedelta(hours=1)
+        hestia.arm_handover(self.home / "TOMORROW.md", since=an_hour_ago)
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "done", "since": an_hour_ago.isoformat(),
+            "until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat()})
+        proc = subprocess.run([sys.executable, str(SCRIPTS / "hestia.py"), "back"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, env=dict(os.environ))
+        out = proc.stdout.decode()
+        self.assertIn("Start here: rerun the importer", out)
+        self.assertIn("Overnight: nothing ran", out)
+        self.assertIsNone(hestia.handover_due(), "the next prompt must not get it again")
 
 
 class TestShutdownEndToEnd(TempHome):
