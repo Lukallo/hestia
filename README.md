@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 51 checks, 140 tests
+## Prove it: 51 checks, 141 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -433,14 +433,14 @@ PASS dream restore puts memory back exactly
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 140 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 141 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 140 tests in 56.342s
+Ran 141 tests in 26.753s
 
 OK (skipped=7)
 ```
@@ -524,6 +524,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
 - Untracked files over `snapshot_max_mb` (50 MB by default) are not saved. `TOMORROW.md` names them under the repo, but the snapshot can't restore them. The limit is per file, so many small new files can still add up.
+- If `~/.hestia/pause.json` can't be read, or its end time can't be parsed, Hestia treats it as no pause and blocks nothing. That's deliberate: a broken file must never lock you out until morning.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
 - `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
