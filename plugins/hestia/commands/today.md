@@ -4,7 +4,7 @@ allowed-tools: Bash
 ---
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" today
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" today
 ```
 
 Print what it says, and stop there. Do not interpret the numbers, do not

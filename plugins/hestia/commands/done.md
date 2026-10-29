@@ -19,7 +19,7 @@ about. Use plain language and no jargon.
   next, or leave `--next` out rather than invent one.
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" done --note "<the note>" --next "<the next step>"
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" done --note "<the note>" --next "<the next step>"
 ```
 
 Then report back in **three lines at most**: what got saved, when the pause

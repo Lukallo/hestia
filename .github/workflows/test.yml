@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.x"]
+        include:
+          # The oldest Python the engine supports.
+          - os: ubuntu-latest
+            python: "3.9"
+    # Steps run in bash on Linux and macOS, and in PowerShell on Windows.
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      # Snapshots are real commits, so git needs an identity.
+      - run: |
+          git config --global user.name "hestia ci"
+          git config --global user.email "ci@hestia.local"
+      - run: python plugins/hestia/scripts/hestia.py selftest
+      - run: python -m unittest discover -s tests -v
+      # The hooks and commands start Hestia through this launcher. Claude Code
+      # runs hooks in Git Bash on Windows, so this step does too.
+      - run: sh plugins/hestia/scripts/hestia selftest
+        shell: bash

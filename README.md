@@ -32,7 +32,7 @@ In Claude Code:
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`, nothing else. Then run `/hestia:init` once (about a minute, every question skippable).
+Needs `git` and Python 3 (`python3` or `python`), nothing else; on Windows, Git for Windows. Then run `/hestia:init` once (about a minute, every question skippable).
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -102,7 +102,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 37 checks, 77 tests</b></summary>
+<summary><b>Real output: 37 checks, 84 tests</b></summary>
 
 ```text
 PASS done runs
@@ -149,12 +149,14 @@ PASS init remove restores CLAUDE.md exactly
 The unittest report (the commands under test also print their own output, left out here):
 
 ```text
-.............................................................................
+..................................ssss..............................................
 ----------------------------------------------------------------------
-Ran 77 tests in 19.596s
+Ran 84 tests in 17.531s
 
-OK
+OK (skipped=4)
 ```
+
+That run was on Windows, where the 4 launcher tests skip (they need a POSIX `sh` with symlinks); CI runs them on Linux and macOS.
 
 The selftest never touches real processes and reads a local changelog, so it runs offline. The tests use real git repos in temp folders; nothing is mocked.
 
@@ -166,7 +168,7 @@ The selftest never touches real processes and reads a local changelog, so it run
 ### Limitations
 
 - Agent stopping only reaches Claude Code processes on this machine, found via `ps`. On Windows the pause works but nothing is signalled.
-- The hooks call `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json`.
+- Hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher that uses `python3`, or `python` when `python3` is missing or the Microsoft Store placeholder. On Windows it needs Git for Windows (Claude Code then runs hooks in Git Bash); without it the pause isn't enforced. Not yet run end to end inside Claude Code on Windows.
 - If a scripted run ever gets the morning list, set `HESTIA_SESSION_KIND=headless` in that job's environment.
 - `/hestia:new` needs the network; offline it says it couldn't check.
 - We can't claim burnout goes down. We can claim the day has an end and nothing ran between shutdown and morning.

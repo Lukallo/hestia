@@ -1,4 +1,8 @@
-"""Tests for the hestia engine. Nothing mocked: real git repos in temp dirs."""
+"""Tests for the hestia engine. Nothing mocked: real git repos in temp dirs.
+
+The one stand-in is the Windows python3 placeholder in TestLauncher, which
+Linux and macOS have no real copy of.
+"""
 
 import json
 import os
@@ -205,12 +209,30 @@ class TestPauseAndHook(TempHome):
             "python3 hestia.py resume",  # old alias must still get through
             "python hestia.py status",
             "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
+            'sh "/plugins/hestia/scripts/hestia" back',  # the launcher
+            "sh '/plugins/hestia/scripts/hestia' today",
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
                 "allow",
                 "pause must not block: %s" % command,
             )
+
+    def test_never_blocks_the_way_back_in_from_powershell(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in [
+            'python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
+            "& python 'C:\\Program Files\\hestia\\scripts\\hestia.py' today",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": "PowerShell", "tool_input": {"command": command}}),
+                "allow",
+                "pause must not block: %s" % command,
+            )
+        self.assertEqual(
+            self.hook({"tool_name": "PowerShell", "tool_input": {"command": "npm test"}}),
+            "deny",
+        )
 
     def test_expired_pause_clears_itself(self):
         self.pause_until(datetime.now().astimezone() - timedelta(minutes=1))
@@ -625,6 +647,75 @@ class TestWithoutPs(TempHome):
         self.assertEqual(len(pause["saved"]), 1)
 
 
+@unittest.skipIf(os.name == "nt" or not shutil.which("sh"), "the launcher runs under sh")
+class TestLauncher(TempHome):
+    """scripts/hestia picks a Python that runs. CI also runs it in Git Bash on Windows."""
+
+    def setUp(self):
+        super().setUp()
+        self.sh = shutil.which("sh")
+        # The Windows python3 placeholder: on PATH, but it only prints where to
+        # get Python. It is the one stand-in here, since Linux and macOS have none.
+        self.store = self.tmp / "WindowsApps"
+        self.store.mkdir()
+        self.write_exe(self.store / "python3", (
+            "#!/bin/sh\n"
+            "echo 'Python was not found; run without arguments to install"
+            " from the Microsoft Store.' >&2\n"
+            "exit 49\n"
+        ))
+        self.real = self.tmp / "bin"
+        self.real.mkdir()
+        try:
+            os.symlink(sys.executable, str(self.real / "python"))
+        except OSError:
+            self.tearDown()  # a skip from setUp never reaches tearDown
+            self.skipTest("needs symlinks")
+
+    def write_exe(self, path, text):
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def launch(self, args, path, payload=None):
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join(str(p) for p in path)
+        return subprocess.run(
+            [self.sh, str(SCRIPTS / "hestia")] + args,
+            input=json.dumps(payload).encode() if payload else b"",
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+
+    def test_runs_past_the_store_placeholder(self):
+        proc = self.launch(["today", "--json"], [self.store, self.real])
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        self.assertIn("paused", json.loads(proc.stdout.decode()))
+
+    def test_the_hook_still_reads_its_input(self):
+        hestia.write_json(
+            hestia.pause_path(),
+            {"until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat()},
+        )
+        path = [self.store, self.real]
+        blocked = self.launch(["hook"], path, {"tool_name": "Edit", "tool_input": {}})
+        self.assertIn('"deny"', blocked.stdout.decode())
+        way_back = {"tool_name": "Bash", "tool_input": {
+            "command": 'sh "%s" back' % (SCRIPTS / "hestia")}}
+        self.assertEqual(self.launch(["hook"], path, way_back).stdout, b"")
+
+    def test_a_python3_that_runs_is_used(self):
+        # The Store's own Python also lives in WindowsApps, and works.
+        os.unlink(str(self.store / "python3"))
+        os.symlink(sys.executable, str(self.store / "python3"))
+        proc = self.launch(["today", "--json"], [self.store])
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+
+    def test_says_so_when_there_is_no_python(self):
+        proc = self.launch(["hook"], [self.store])
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("needs Python 3", proc.stderr.decode())
+        self.assertEqual(proc.stdout, b"")
+
+
 class TestWhy(TempHome):
     def setUp(self):
         super().setUp()
@@ -919,6 +1010,26 @@ class TestDashboard(TempHome):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
         self.assertFalse((self.home / "TOMORROW.md").exists())
+
+
+class TestEverythingUsesTheLauncher(unittest.TestCase):
+    """A hook that calls python3 directly fails silently on Windows, and the pause isn't enforced."""
+
+    LAUNCHER = 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia"'
+    PLUGIN = ROOT / "plugins" / "hestia"
+
+    def test_every_hook_goes_through_the_launcher(self):
+        hooks = json.loads((self.PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        commands = [h["command"] for groups in hooks.values() for group in groups for h in group["hooks"]]
+        self.assertTrue(commands)
+        for command in commands:
+            self.assertTrue(command.startswith(self.LAUNCHER + " "), command)
+
+    def test_no_command_calls_python_directly(self):
+        for md in sorted((self.PLUGIN / "commands").glob("*.md")):
+            text = md.read_text(encoding="utf-8")
+            self.assertNotIn("scripts/hestia.py", text, md.name)
+            self.assertIn(self.LAUNCHER, text, md.name)
 
 
 if __name__ == "__main__":
