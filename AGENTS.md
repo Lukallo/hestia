@@ -48,6 +48,7 @@ correctness bug.
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
 | `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests. |
+| `tests/test_platforms.py` | What differs between Linux, macOS and Windows: text encodings, paths with spaces, the restore line in each shell, and the hooks as installed. |
 | `.github/workflows/test.yml` | CI: the selftest and unit tests on Linux, macOS and Windows (PowerShell), plus the selftest through the launcher in bash, which is Git Bash on Windows. |
 | `tests/compat/` | A live check that runs real `claude -p` sessions with Hestia, a stand-in connector (`fake_mcp.py`) and a stand-in plugin (`other/`). Not one of the three checks: it needs the `claude` CLI and costs a few cents. |
 | `README.md` | The public face, read by users and by an automated judge. Every output block in it is a real capture. |
