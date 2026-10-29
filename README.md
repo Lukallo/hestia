@@ -120,7 +120,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 47 checks, 110 tests</b></summary>
+<summary><b>Real output: 51 checks, 141 tests</b></summary>
 
 ```text
 PASS done runs
@@ -188,15 +188,7 @@ Ran 141 tests in 26.753s
 OK (skipped=7)
 ```
 
-The unittest result (the commands under test print their own output in between, left out here):
-
-```text
-Ran 110 tests in 33.009s
-
-OK (skipped=6)
-```
-
-That run was on Windows, where 6 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, and 2 dashboard tests use a shell-script stand-in browser. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
+On Windows, 7 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, 2 dashboard tests use a shell-script stand-in browser, and 1 needs `time.tzset`, which is POSIX only. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
 
 ## What it deliberately doesn't do
 
