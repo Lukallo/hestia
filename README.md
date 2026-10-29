@@ -112,7 +112,7 @@ Plus two things that happen on their own, and nothing else:
 The second one is the whole trick. The context you left with is given back automatically, and exactly once, because a recap on every session is just noise.
 
 > [!TIP]
-> While paused or on a break, the hook blocks every tool call except the way back in. `/hestia:back` is explicitly allowlisted, so you can never lock yourself out.
+> While paused or on a break, the hook blocks every tool call except the way back in, including connector tools, subagents and other plugins' tools. `/hestia:back` is explicitly allowlisted, from Bash or PowerShell, so you can never lock yourself out. It only gets through on its own: anything chained to it, piped or run in a subshell is blocked.
 
 ### Stopping agents, carefully
 
@@ -285,7 +285,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 32 checks, 63 tests
+## Prove it: 35 checks, 66 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -307,6 +307,9 @@ PASS tomorrow's list written
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
+PASS hook allows back from PowerShell
+PASS hook blocks work chained after back
+PASS hook blocks connector tools while paused
 PASS no handover while still paused
 PASS back runs
 PASS old names still work as aliases
@@ -329,22 +332,45 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS init remove restores CLAUDE.md exactly
 
-32/32 checks passed
+35/35 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 63 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 66 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 63 tests in 14.664s
+Ran 66 tests in 9.532s
 
 OK
 ```
+
+### Next to other plugins and connectors
+
+Hestia's pause is a `PreToolUse` hook, and other plugins can have their own. Claude Code ranks one hook's deny above any other hook's allow, so another plugin can't approve its way past the pause. A live check runs real `claude -p` sessions with Hestia, a stand-in connector and a stand-in plugin that approves every tool call:
+
+```text
+tests/compat/run.sh
+```
+
+Real output, Claude Code 2.1.312:
+
+```text
+PASS not paused: the connector's tool runs as normal
+PASS paused: the connector's tool is blocked, though another plugin approves it
+PASS paused: a subagent can't run commands
+PASS paused: another plugin's command is blocked
+PASS paused: /hestia:back still gets you out
+PASS morning: Hestia's handover and the other plugin's context both arrive
+
+6/6 checks passed
+```
+
+It needs the `claude` CLI and costs a few cents per run. Each scenario uses a throwaway `HESTIA_HOME`, so nothing on your machine is paused.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -378,7 +404,9 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - Agent stopping finds Claude Code processes on **this machine**, via `ps`. A run on a CI box, a remote host or inside a container keeps going; so does anything not launched as `claude`.
 - Process detection is POSIX (`ps`, `SIGTERM`). On Windows the pause still works (the hook blocks the next step), but nothing is signalled.
 - The handover fires on `SessionStart` with the `startup` matcher, so resuming an existing session with `--continue` won't re-deliver the list. That's deliberate: it's already in that session's context.
-- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out.
+- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out, but only as a command on its own.
+- A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
+- The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.

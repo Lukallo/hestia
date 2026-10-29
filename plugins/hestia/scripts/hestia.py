@@ -50,11 +50,25 @@ CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/C
 NEW_MAX_RELEASES = 10
 NEW_MAX_CHANGES = 150
 
-# Bash commands matching this are always allowed while paused, otherwise the
-# pause would block the only command that lifts it.
+# The tools Claude Code runs shell commands with. PowerShell is the one it uses
+# on Windows when Git Bash isn't installed.
+SHELL_TOOLS = ("Bash", "PowerShell")
+
+# A shell command matching this is always allowed while paused, otherwise the
+# pause would block the only command that lifts it. It has to be the whole
+# command: one hestia call, with an optional interpreter in front.
 RESUME_PATTERN = re.compile(
-    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|dashboard|hook|session-start|selftest)\b"
+    r"""^
+    (?:(?:"[^"]*python[\w.]*"|(?:[^\s"']*[/\\])?python[\w.]*|py(?:\s+-3(?:\.\d+)?)?)\s+)?
+    (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
+    \s+(back|resume|today|status|dashboard|hook|session-start|selftest)\b
+    """,
+    re.X | re.I,
 )
+
+# Anything that could run a second command never counts as the way back in:
+# chaining, pipes, redirects, subshells and new lines.
+SHELL_JOINERS = re.compile(r"[;&|`\n\r<>]|\$\(")
 
 
 # --------------------------------------------------------------------------
@@ -1172,6 +1186,19 @@ def cmd_dashboard(args):
     return 0
 
 
+def is_way_back_in(tool, tool_input):
+    """True only for a single shell command that lifts the pause or reads it."""
+    if tool not in SHELL_TOOLS:
+        return False
+    command = str(tool_input.get("command") or "").strip()
+    command = re.sub(r"\s*2>&1\s*$", "", command)  # folding stderr in runs nothing new
+    if command.startswith("&"):  # PowerShell's call operator
+        command = command[1:].lstrip()
+    if SHELL_JOINERS.search(command):
+        return False
+    return bool(RESUME_PATTERN.match(command))
+
+
 def cmd_hook(args):
     """PreToolUse hook. Silent and immediate when there is no pause."""
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -1188,10 +1215,8 @@ def cmd_hook(args):
     tool_input = payload.get("tool_input") or {}
 
     # Never block the way back in.
-    if tool == "Bash":
-        command = str(tool_input.get("command") or "")
-        if RESUME_PATTERN.search(command):
-            return 0
+    if is_way_back_in(tool, tool_input):
+        return 0
 
     if pause.get("kind") == "break":
         reason = "%s Run /hestia:back to end it early." % pause_line(pause)
@@ -2056,6 +2081,23 @@ def cmd_selftest(args):
             script, {"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py resume"}}, env
         )
         check("hook always allows back", decision == "allow")
+
+        decision = _hook_decision(
+            script, {"tool_name": "PowerShell", "tool_input": {"command": 'python "C:\\hestia\\hestia.py" back'}}, env
+        )
+        check("hook allows back from PowerShell", decision == "allow")
+
+        # Only the whole command gets through: nothing can ride along with it.
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py back && npm test"}}, env
+        )
+        check("hook blocks work chained after back", decision == "deny")
+
+        # Connectors and other plugins' tools are paused like any other tool.
+        decision = _hook_decision(
+            script, {"tool_name": "mcp__claude_ai_Slack__slack_send_message", "tool_input": {"text": "hi"}}, env
+        )
+        check("hook blocks connector tools while paused", decision == "deny")
 
         # The morning handover: not while paused, once afterwards, then silent.
         def handover():
