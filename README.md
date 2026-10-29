@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `44/44 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `47/47 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 44 checks, 100 tests
+## Prove it: 47 checks, 115 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -420,25 +420,28 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
 PASS init remove restores CLAUDE.md exactly
+PASS dream plan backs up today's memory
+PASS dream check rolls back a broken tidy
+PASS dream restore puts memory back exactly
 
-44/44 checks passed
+47/47 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 100 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 115 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 100 tests in 21.589s
+Ran 115 tests in 17.814s
 
 OK
 ```
 
-That run was on Linux. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
+That run was on macOS. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
 
 `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: notes, prompts and paths in any language, folders with spaces, the restore line pasted into each shell on the machine, and every hook run the way Claude Code runs it. Where it can, it also recreates Windows' text encodings, so a regression shows up on any machine.
 
@@ -567,6 +570,8 @@ Optional, at `~/.hestia/config.json`:
 `working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning.
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
+
+If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work and a personal account apart, Hestia follows it: it reads that account's session logs, tidies that account's memory at `done`, and writes its `/hestia:init` section to that account's `CLAUDE.md`.
 
 </details>
 

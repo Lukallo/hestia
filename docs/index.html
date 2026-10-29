@@ -108,7 +108,7 @@
   </div>
   <div class="tile">
     <h3>Picking back up is guaranteed, once</h3>
-    <p>The first session next morning is handed yesterday's list automatically, a single time. Then Hestia goes quiet.</p>
+    <p>However the morning starts, with a new session, a resumed one or the window you left open, the first one you're at after the pause is handed yesterday's list and the first thing to do. Once, then Hestia goes quiet. Scripted runs never take it.</p>
   </div>
 </section>
 
@@ -259,7 +259,7 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
     <div class="tile cmd-card"><img src="assets/icons/tend.svg" alt=""><div><span class="cmd">/hestia:init</span><p>Once. Four skippable questions, saved to a marked section of <code>~/.claude/CLAUDE.md</code>.</p></div></div>
     <div class="tile cmd-card"><img src="assets/icons/bank.svg" alt=""><div><span class="cmd">/hestia:done [note]</span><p>Saves open work, writes tomorrow's list, pauses Claude until the next working morning.</p></div></div>
     <div class="tile cmd-card"><img src="assets/icons/rest.svg" alt=""><div><span class="cmd">/hestia:break [45m]</span><p>Saves where you are and pauses agents for that long, then lifts itself.</p></div></div>
-    <div class="tile cmd-card"><img src="assets/icons/spark.svg" alt=""><div><span class="cmd">/hestia:back</span><p>Lifts a pause or break early, and reminds you what you were mid-way through.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/spark.svg" alt=""><div><span class="cmd">/hestia:back</span><p>Lifts a pause or break early, and tells you where to start and what ran while you were away.</p></div></div>
     <div class="tile cmd-card"><img src="assets/icons/embers.svg" alt=""><div><span class="cmd">/hestia:today</span><p>Whether you're paused, and today's load. Only ever when you ask.</p></div></div>
     <div class="tile cmd-card"><img src="assets/icons/embers.svg" alt=""><div><span class="cmd">/hestia:dashboard</span><p>The same reading as one static page. Opens when you ask, never refreshes.</p></div></div>
     <div class="tile cmd-card"><img src="assets/icons/home.svg" alt=""><div><span class="cmd">/hestia:why [who for]</span><p>One plain paragraph on who today's work helps, built from your real commits.</p></div></div>
@@ -287,7 +287,7 @@ Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
       <p>Check every claim yourself. One command builds a throwaway repo and runs the whole flow:</p>
       <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">terminal</span></div>
 <pre><span class="p">python3 plugins/hestia/scripts/hestia.py selftest</span>
-44/44 checks passed</pre></div>
+47/47 checks passed</pre></div>
     </div>
   </div>
 </section>
