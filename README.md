@@ -564,7 +564,7 @@ Optional, at `~/.hestia/config.json`:
 }
 ```
 
-`working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning.
+`working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning. Shutting down after midnight but before `resume_hour` resumes that same morning. The resume time follows your local clock, so a clock change in between doesn't move it.
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 
