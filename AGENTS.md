@@ -244,6 +244,19 @@ Bash.
 5. **Re-capture** every README block the change affects (see section 8).
 6. Update the check and test counts in the README heading and body.
 
+### Ship it to people who already installed
+
+Claude Code only updates an installed plugin when its version number
+changes. If anything under `plugins/hestia/` changes and the version stays
+the same, `claude plugin update hestia@hestia` says "already at the latest
+version" and keeps the old hooks and scripts.
+
+So bump `version` in `plugins/hestia/.claude-plugin/plugin.json` and
+`metadata.version` in `.claude-plugin/marketplace.json` together, in the PR
+that changes the plugin, or in one PR just before a release. A fresh install
+always gets the latest files whatever the number says. The bump is for
+everyone else.
+
 ### Add a command
 
 Do all of these in the same change, or names drift:
