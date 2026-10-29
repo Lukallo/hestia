@@ -55,9 +55,27 @@ library only.
 | `/hestia:resume` | Lifts the pause early, and reminds you of the one thing you were mid-way through |
 | `/hestia:status` | Whether you're paused, and today's load — only ever when you ask |
 
-While paused, a `PreToolUse` hook stops Claude from taking actions and says when
-you're back. That's the part that actually ends the day: the agents stop, not
-just you.
+Plus two things that happen on their own, and nothing else:
+
+| | What happens |
+|---|---|
+| *at shutdown* | Unattended agents are sent `SIGTERM`. Interactive sessions are left alone and reported — a `PreToolUse` hook stops them at their next step instead of killing a window you're sitting in front of |
+| *next morning* | A `SessionStart` hook hands yesterday's list to the first session after the pause, **once**, then goes quiet |
+
+That second one is the whole trick. Stopping is only possible if picking back up
+is guaranteed, so the context you left with is given back automatically — and
+exactly once, because a recap on every session is just noise.
+
+### Stopping agents, carefully
+
+A headless run (`claude --print`, `--output-format`) has nobody watching it, so
+it's the kind that quietly burns all night. Those get `SIGTERM` — graceful,
+never `SIGKILL`. An interactive session has a person at it, so killing it would
+take work away rather than give time back; it's reported and paused instead.
+
+Hestia never signals its own process or anything that spawned it, so the command
+can't stop itself. `--keep-agents` reports without stopping anything;
+`--stop-all` includes interactive sessions.
 
 ## What you'll see
 
@@ -71,7 +89,8 @@ live session.
 $ /hestia:shutdown unblocking the CSV import for the ops team
 
 Clocked out until Fri 30 Oct 08:00.
-  saved 2 files in demo -> refs/hestia/2026-10-29-180204
+  saved 2 files in demo -> refs/hestia/2026-10-29-180609
+  1 Claude session still open - paused, they'll stop at their next step
   tomorrow's list: ~/.hestia/TOMORROW.md
 ```
 
@@ -92,6 +111,10 @@ Three lines, and it stops. That's the whole answer.
 ## Today
 
 - no prompts recorded today
+
+## Overnight
+
+- 1 Claude session left open, paused until morning
 ```
 
 The throwaway repo has no session history, so `Today` is empty here. On a real
@@ -119,11 +142,22 @@ PASS tomorrow's list written
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows resume
+PASS no handover while still paused
 PASS resume runs
+PASS morning gets yesterday's list
+PASS handover carries the note
+PASS handover happens only once
 PASS hook is silent after resume
 PASS expired pause clears itself
 
-14/14 checks passed
+18/18 checks passed
+```
+
+And 22 unit tests against real git repositories:
+
+```
+Ran 22 tests in 1.012s
+OK
 ```
 
 ## How your work is saved
@@ -155,6 +189,7 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 |---|---|---|
 | Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
 | Pause state | `~/.hestia/pause.json` | `/hestia:resume`, or delete the file |
+| Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
 | Config | `~/.hestia/config.json` (optional) | delete it |
 
@@ -200,8 +235,14 @@ re-orientation, and the agents that would otherwise have run all night.
 
 ## Honest limitations
 
-- The pause blocks tool use **inside Claude Code**. Agents you started by other
-  means (a cron job, a CI runner, a separate terminal) keep going.
+- Agent stopping finds Claude Code processes on **this machine**, via `ps`. A run
+  on a CI box, a remote host or inside a container keeps going; so does anything
+  not launched as `claude`.
+- Process detection is POSIX (`ps`, `SIGTERM`). On Windows the pause still works
+  — the hook blocks the next step — but nothing is signalled.
+- The handover fires on `SessionStart` with the `startup` matcher, so resuming an
+  existing session with `--continue` won't re-deliver the list. That's
+  deliberate: it's already in that session's context.
 - While paused, Claude won't act on anything — including for you. That's
   deliberate, but it means `/hestia:resume` is the only way back in tonight. The
   hook allowlists that command explicitly so you can never lock yourself out.

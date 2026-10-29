@@ -285,6 +285,90 @@ def snapshot_repo(repo, ref, message):
 
 
 # --------------------------------------------------------------------------
+# running agents
+# --------------------------------------------------------------------------
+
+# A headless run has no one watching it, so it is the kind that quietly keeps
+# going all night. An interactive session has a person at it.
+HEADLESS_MARKERS = ("--print", "--output-format", "-p ")
+
+
+def _ps_table():
+    proc = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,command="],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    rows = []
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[1]), parts[2]))
+        except ValueError:
+            continue
+    return rows
+
+
+def _own_pids(rows):
+    """This process and everything that spawned it - never our own feet."""
+    parents = {pid: ppid for pid, ppid, _ in rows}
+    pids = set()
+    current = os.getpid()
+    for _ in range(16):
+        if current in pids or current <= 1:
+            break
+        pids.add(current)
+        current = parents.get(current, 0)
+    return pids
+
+
+def _is_claude(command):
+    parts = command.split()
+    if not parts:
+        return False
+    if os.path.basename(parts[0]) in ("claude", "claude-code"):
+        return True
+    # node /path/to/claude ...
+    if os.path.basename(parts[0]) in ("node", "bun") and len(parts) > 1:
+        return os.path.basename(parts[1]) in ("claude", "claude-code", "cli.js")
+    return False
+
+
+def running_agents():
+    """Claude Code processes other than our own, split by whether anyone's watching."""
+    rows = _ps_table()
+    mine = _own_pids(rows)
+    found = []
+    for pid, _ppid, command in rows:
+        if pid in mine or not _is_claude(command):
+            continue
+        headless = any(marker in command + " " for marker in HEADLESS_MARKERS)
+        found.append({"pid": pid, "command": command[:120], "headless": headless})
+    return found
+
+
+def stop_agents(stop_all=False):
+    """SIGTERM unattended agents. Interactive sessions are reported, not killed."""
+    import signal
+
+    stopped, left = [], []
+    for agent in running_agents():
+        if agent["headless"] or stop_all:
+            try:
+                os.kill(agent["pid"], signal.SIGTERM)
+                agent["signal"] = "SIGTERM"
+                stopped.append(agent)
+            except OSError as error:
+                agent["error"] = str(error)
+                left.append(agent)
+        else:
+            left.append(agent)
+    return stopped, left
+
+
+# --------------------------------------------------------------------------
 # Claude Code session logs
 # --------------------------------------------------------------------------
 
@@ -400,7 +484,9 @@ def discover_repos(prompts, cfg, extra=None):
 # tomorrow's list
 # --------------------------------------------------------------------------
 
-def write_tomorrow(now, note, snapshots, load, prompts):
+def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open=None):
+    stopped = stopped or []
+    still_open = still_open or []
     lines = ["# Tomorrow - %s" % now.strftime("%a %d %b"), ""]
     if note:
         lines += ["> %s" % note.strip(), ""]
@@ -460,6 +546,21 @@ def write_tomorrow(now, note, snapshots, load, prompts):
         lines.append("- no prompts recorded today")
     lines.append("")
 
+    lines += ["## Overnight", ""]
+    if stopped:
+        lines.append(
+            "- stopped %d unattended agent%s at %s"
+            % (len(stopped), "" if len(stopped) == 1 else "s", now.strftime("%H:%M"))
+        )
+    if still_open:
+        lines.append(
+            "- %d Claude session%s left open, paused until morning"
+            % (len(still_open), "" if len(still_open) == 1 else "s")
+        )
+    if not stopped and not still_open:
+        lines.append("- nothing was running")
+    lines.append("")
+
     recent = [p["text"] for p in prompts[-5:]]
     if recent:
         lines += ["## The last things you asked for", ""]
@@ -496,7 +597,14 @@ def cmd_shutdown(args):
         snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
     ]
 
-    tomorrow = write_tomorrow(now, args.note, snapshots, load, prompts)
+    if args.keep_agents:
+        stopped, still_open = [], running_agents()
+    else:
+        stopped, still_open = stop_agents(stop_all=args.stop_all)
+
+    tomorrow = write_tomorrow(
+        now, args.note, snapshots, load, prompts, stopped, still_open
+    )
 
     write_json(
         pause_path(),
@@ -506,6 +614,11 @@ def cmd_shutdown(args):
             "note": args.note or "",
             "tomorrow": str(tomorrow),
         },
+    )
+    # Re-arm the morning handover for this list.
+    write_json(
+        hestia_home() / "handover.json",
+        {"for": tomorrow.stat().st_mtime, "consumed": False},
     )
 
     result = {
@@ -522,6 +635,8 @@ def cmd_shutdown(args):
             "span_hours": load["span_hours"],
             "last_break_minutes": load["last_break_minutes"],
         },
+        "agents_stopped": stopped,
+        "agents_still_open": still_open,
         "errors": [s["error"] for s in snapshots if s["error"]],
         "integrity_ok": all(s["untouched"] for s in snapshots),
     }
@@ -544,6 +659,13 @@ def cmd_shutdown(args):
         )
     if not saved:
         print("  nothing uncommitted to save")
+    if stopped:
+        print("  stopped %d unattended agent%s" % (len(stopped), "" if len(stopped) == 1 else "s"))
+    if still_open:
+        print(
+            "  %d Claude session%s still open - paused, they'll stop at their next step"
+            % (len(still_open), "" if len(still_open) == 1 else "s")
+        )
     print("  tomorrow's list: %s" % tomorrow)
     if result["errors"]:
         for error in result["errors"]:
@@ -648,6 +770,47 @@ def cmd_hook(args):
     return 0
 
 
+def cmd_session_start(args):
+    """SessionStart hook: hand yesterday's list to the new day, once.
+
+    This is the other half of the mechanism. Stopping is only possible if
+    picking back up is guaranteed, so the context you left with is given back
+    automatically - but exactly once, or it becomes noise.
+    """
+    tomorrow = hestia_home() / "TOMORROW.md"
+    if not tomorrow.exists():
+        return 0
+    if read_pause():
+        return 0  # still clocked out; the list is not due yet
+
+    handover_path = hestia_home() / "handover.json"
+    state = read_json(handover_path) or {}
+    stamp = tomorrow.stat().st_mtime
+    if state.get("consumed") and state.get("for") == stamp:
+        return 0  # already handed over for this list
+
+    text = tomorrow.read_text().strip()
+    if not text:
+        return 0
+
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": (
+                        "Where the last working day was left off, from Hestia. "
+                        "Use it to pick up the thread; do not act on it unless asked.\n\n"
+                        + text
+                    ),
+                }
+            }
+        )
+    )
+    write_json(handover_path, {"for": stamp, "consumed": True, "at": datetime.now().astimezone().isoformat()})
+    return 0
+
+
 # --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
@@ -724,7 +887,8 @@ def cmd_selftest(args):
         status_before = rungit(["status", "--porcelain"]).stdout.decode()
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
-        proc = run(["shutdown", "--note", "selftest", "--json"])
+        # --keep-agents: the selftest must never touch real processes.
+        proc = run(["shutdown", "--note", "selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
         check("shutdown runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
@@ -760,8 +924,25 @@ def cmd_selftest(args):
         )
         check("hook always allows resume", decision == "allow")
 
+        # The morning handover: not while paused, once afterwards, then silent.
+        def handover():
+            got = subprocess.run(
+                [sys.executable, str(script), "session-start"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            ).stdout.decode().strip()
+            if not got:
+                return ""
+            return json.loads(got)["hookSpecificOutput"]["additionalContext"]
+
+        check("no handover while still paused", handover() == "")
+
         proc = run(["resume"])
         check("resume runs", proc.returncode == 0)
+
+        first = handover()
+        check("morning gets yesterday's list", "Where you left off" in first)
+        check("handover carries the note", "selftest" in first)
+        check("handover happens only once", handover() == "")
 
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("hook is silent after resume", decision == "allow")
@@ -789,6 +970,8 @@ def main(argv=None):
     p = sub.add_parser("shutdown", help="save open work, write tomorrow's list, pause agents")
     p.add_argument("--note", default="", help="one line about what today was for")
     p.add_argument("--until", default="", help="HH:MM or ISO timestamp (default: next working morning)")
+    p.add_argument("--keep-agents", action="store_true", help="report running agents but don't stop them")
+    p.add_argument("--stop-all", action="store_true", help="also stop interactive Claude sessions")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_shutdown)
 
@@ -801,6 +984,9 @@ def main(argv=None):
 
     p = sub.add_parser("hook", help="PreToolUse hook (reads JSON on stdin)")
     p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser("session-start", help="SessionStart hook: hand over yesterday's list, once")
+    p.set_defaults(func=cmd_session_start)
 
     p = sub.add_parser("selftest", help="prove the whole flow on a throwaway repo")
     p.set_defaults(func=cmd_selftest)

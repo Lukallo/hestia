@@ -209,6 +209,68 @@ class TestPauseAndHook(TempHome):
         self.assertFalse(hestia.pause_path().exists())
 
 
+class TestAgentDetection(TempHome):
+    def test_recognises_claude_processes(self):
+        self.assertTrue(hestia._is_claude("claude --print 'hi'"))
+        self.assertTrue(hestia._is_claude("/usr/local/bin/claude"))
+        self.assertTrue(hestia._is_claude("node /opt/claude/cli.js"))
+        self.assertFalse(hestia._is_claude("vim notes.md"))
+        # The desktop app's own path contains 'Claude' but isn't an agent.
+        self.assertFalse(
+            hestia._is_claude("/Applications/Claude.app/Contents/MacOS/Electron")
+        )
+        self.assertFalse(hestia._is_claude(""))
+
+    def test_never_lists_our_own_process(self):
+        pids = [agent["pid"] for agent in hestia.running_agents()]
+        self.assertNotIn(os.getpid(), pids)
+
+    def test_headless_runs_are_told_apart_from_sessions(self):
+        self.assertTrue(any(m in "claude --print 'x' " for m in hestia.HEADLESS_MARKERS))
+        self.assertFalse(any(m in "claude " for m in hestia.HEADLESS_MARKERS))
+
+
+class TestMorningHandover(TempHome):
+    def session_start(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "session-start"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=dict(os.environ),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        out = proc.stdout.decode().strip()
+        if not out:
+            return ""
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+    def write_list(self, text="# Tomorrow\n\nstart with the parser\n"):
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "TOMORROW.md").write_text(text)
+
+    def test_nothing_to_hand_over(self):
+        self.assertEqual(self.session_start(), "")
+
+    def test_hands_over_once_then_stays_quiet(self):
+        self.write_list()
+        first = self.session_start()
+        self.assertIn("start with the parser", first)
+        self.assertEqual(self.session_start(), "", "a second session must get nothing")
+
+    def test_stays_quiet_while_still_paused(self):
+        self.write_list()
+        hestia.write_json(
+            hestia.pause_path(),
+            {"until": (datetime.now().astimezone() + timedelta(hours=8)).isoformat()},
+        )
+        self.assertEqual(self.session_start(), "")
+
+    def test_a_new_list_re_arms_the_handover(self):
+        self.write_list()
+        self.assertIn("parser", self.session_start())
+        self.assertEqual(self.session_start(), "")
+        self.write_list("# Tomorrow\n\nstart with the importer\n")
+        self.assertIn("importer", self.session_start(), "a fresh shutdown re-arms it")
+
+
 class TestShutdownEndToEnd(TempHome):
     def test_shutdown_saves_pauses_and_writes_the_list(self):
         repo = self.make_repo()
@@ -216,7 +278,13 @@ class TestShutdownEndToEnd(TempHome):
         cwd = os.getcwd()
         os.chdir(str(repo))
         try:
-            args = hestia.argparse.Namespace(note="keeping the lights on", until="", json=True)
+            args = hestia.argparse.Namespace(
+                note="keeping the lights on",
+                until="",
+                json=True,
+                keep_agents=True,  # never touch real processes from a test
+                stop_all=False,
+            )
             self.assertEqual(hestia.cmd_shutdown(args), 0)
         finally:
             os.chdir(cwd)
