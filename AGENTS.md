@@ -248,6 +248,30 @@ Bash.
 5. **Re-capture** every README block the change affects (see section 8).
 6. Update the check and test counts in the README heading and body.
 
+### Change the CLAUDE.md section
+
+`/hestia:init` writes a short "Hestia: about me" section into the user's
+`~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->`.
+It loads into **every** session in every project, so each line costs tokens
+forever. `render_claude_section()` in `hestia.py` is the only thing that writes
+it. Keep it efficient:
+
+- **Budget:** at most 8 bullets and `SECTION_MAX_CHARS` (800 characters),
+  markers included. `TestClaudeMdBudget` fills every answer at maximum length
+  and fails past that. Free-text answers are clipped to `SECTION_ANSWER_CHARS`.
+- **Every line must change how Claude behaves.** "Explain by what it does for
+  people first" earns its place. A fact Claude never acts on doesn't.
+- **Only what Claude can't learn elsewhere.** No git username, no paths, no
+  repo facts. A name goes in only if the person typed it (`name_given`).
+- **No command manuals.** Each command's `.md` describes itself. Name a command
+  only to tell Claude how to behave around it, for example "after
+  /hestia:done or during /hestia:break, don't suggest more work".
+- **Plain, imperative, one idea per bullet,** in the person's voice ("I work
+  Mon-Fri"), because it sits among their own notes.
+- **Never edit it from anywhere else.** If a new command changes how Claude
+  should behave, change the renderer, add a test, and the next `init` rewrites
+  the section. Outside the markers stays byte-identical (see the invariants).
+
 ### Add a command
 
 Do all of these in the same change, or names drift:
