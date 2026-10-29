@@ -583,3 +583,4 @@ If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work an
 - [PLAN.md](PLAN.md): the full design, the burnout grounding, and the audit of what was cut and why.
 - [assets/BRAND.md](assets/BRAND.md): the visual identity, palette and icon rules.
 - [REFERENCE.md](REFERENCE.md): projects we learned from, and what we took from each.
+- [LICENSE](LICENSE): MIT. Use it, change it and share it; keep the copyright notice.
