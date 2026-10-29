@@ -494,6 +494,16 @@ class TestPauseAndHook(TempHome):
                 "pause must not block: %s" % command,
             )
 
+    def test_selftest_is_not_a_way_back_in(self):
+        # It makes real commits and starts subprocesses, so it waits too.
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in ["python3 hestia.py selftest", 'sh "/plugins/hestia/scripts/hestia" selftest']:
+            self.assertEqual(
+                self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
+                "deny",
+                "pause must hold: %s" % command,
+            )
+
     def test_way_back_in_from_powershell(self):
         # Claude Code uses a PowerShell tool on Windows without Git Bash.
         self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
