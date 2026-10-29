@@ -36,6 +36,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,9 @@ DEFAULT_WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday-Friday
 DEFAULT_BREAK_MINUTES = 45
 # A break longer than this is the end of the day, which is what `done` is for.
 MAX_BREAK_MINUTES = 4 * 60
+# Untracked files bigger than this stay out of snapshots, so every `done` and
+# `break` doesn't copy them into .git/objects again. 0 or less means no limit.
+DEFAULT_SNAPSHOT_MAX_MB = 50
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
 # `new` hands Claude a bounded slice of the changelog, never the whole history.
@@ -96,6 +100,7 @@ def load_config():
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
         "screen": None,  # set by init; None means guess with has_screen()
+        "snapshot_max_mb": DEFAULT_SNAPSHOT_MAX_MB,
     }
     path = hestia_home() / "config.json"
     if path.exists():
@@ -313,13 +318,113 @@ def index_fingerprint(repo):
     return hashlib.sha256(index.read_bytes()).hexdigest()
 
 
-def snapshot_repo(repo, ref, message):
+def snapshot_limit_mb(value):
+    """The snapshot size limit as a positive number of MB, or None for none."""
+    if value is None:
+        return None
+    try:
+        mb = float(value)
+    except (TypeError, ValueError):
+        mb = float(DEFAULT_SNAPSHOT_MAX_MB)
+    if not mb > 0 or mb == float("inf"):
+        return None
+    return mb
+
+
+def git_z(repo, args, env=None):
+    """Run git for NUL-separated output and return its fields as str paths.
+
+    os.fsdecode keeps names that aren't UTF-8 intact, so they can go straight
+    back to git or to the file system.
+    """
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    try:
+        proc = subprocess.run(
+            ["git"] + args,
+            cwd=str(repo),
+            env=full_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return [os.fsdecode(field) for field in proc.stdout.split(b"\0") if field]
+
+
+def untracked_over(repo, limit_bytes):
+    """Untracked, non-ignored files bigger than limit_bytes.
+
+    Returns (all untracked paths, the ones over the limit), relative to the
+    repo. It only stats files: nothing is read or hashed, so nothing reaches
+    .git/objects.
+    """
+    untracked = git_z(repo, ["ls-files", "--others", "--exclude-standard", "-z"]) or []
+    over = []
+    for name in untracked:
+        if name.endswith("/"):
+            continue  # an embedded repo: git saves it as a link, not its files
+        try:
+            st = (Path(repo) / name).lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size > limit_bytes:
+            over.append(name)
+    return untracked, over
+
+
+def entries_left_out(repo, untracked, over):
+    """How many `git status` entries hold nothing but files left out.
+
+    git status shows a new folder as one entry, so a folder counts only when
+    every untracked file in it was left out.
+    """
+    # No optional locks: status must not refresh .git/index mid-snapshot.
+    fields = git_z(repo, ["status", "--porcelain", "-z"], env={"GIT_OPTIONAL_LOCKS": "0"})
+    if not fields:
+        return 0
+    left_out = set(over)
+    count = 0
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if "R" in entry[:2] or "C" in entry[:2]:
+            index += 1  # a rename is followed by its old path
+        if not entry.startswith("?? "):
+            continue
+        path = entry[3:]
+        if path.endswith("/"):
+            inside = [name for name in untracked if name.startswith(path)]
+            if inside and all(name in left_out for name in inside):
+                count += 1
+        elif path in left_out:
+            count += 1
+    return count
+
+
+def display_path(name):
+    """A path from git_z as text that is safe to print or write as UTF-8."""
+    return os.fsencode(name).decode("utf-8", "replace")
+
+
+def snapshot_repo(repo, ref, message, max_mb=None):
     """Commit the working tree to a hestia ref without touching the repo.
 
     Uses a temporary index, so .git/index, the working tree and the current
     branch are all left exactly as they were. Returns a dict of facts.
+
+    With max_mb, untracked files bigger than that are left out and listed in
+    "skipped". They are never hashed, so they never reach .git/objects.
+    Tracked files are always saved, whatever their size. When every change
+    was left out, the ref still points at a commit with HEAD's tree, and
+    "dirty_files" is 0.
     """
     repo = Path(repo)
+    limit_mb = snapshot_limit_mb(max_mb)
     before_head = git(repo, ["rev-parse", "HEAD"])
     before_status = git(repo, ["status", "--porcelain"]).out
     before_index = index_fingerprint(repo)
@@ -333,12 +438,21 @@ def snapshot_repo(repo, ref, message):
         "ref": None,
         "commit": None,
         "clean": not dirty,
+        "skipped": [],
+        "max_mb": limit_mb,
         "untouched": True,
         "error": None,
     }
 
     if not dirty:
         return info
+
+    over = []
+    if limit_mb is not None:
+        untracked, over = untracked_over(repo, int(limit_mb * 1024 * 1024))
+        if over:
+            info["dirty_files"] = max(0, len(dirty) - entries_left_out(repo, untracked, over))
+            info["skipped"] = sorted(display_path(name) for name in over)
 
     handle, index_file = tempfile.mkstemp(prefix="hestia-index-")
     os.close(handle)
@@ -350,7 +464,21 @@ def snapshot_repo(repo, ref, message):
             if not read.ok:
                 info["error"] = read.err
                 return info
-        added = git(repo, ["add", "-A"], env=env)
+        add, add_env = ["add", "-A"], env
+        if over:
+            # Excluding them here, not after, is what keeps them out of
+            # .git/objects: `add` hashes every file it stages. literal makes
+            # * [ ? and a leading : plain characters in a file name.
+            add += ["--", "."] + [":(exclude,literal)%s" % name for name in over]
+            # The user's own pathspec settings must not turn that magic off.
+            add_env = dict(
+                env,
+                GIT_LITERAL_PATHSPECS="0",
+                GIT_GLOB_PATHSPECS="0",
+                GIT_NOGLOB_PATHSPECS="0",
+                GIT_ICASE_PATHSPECS="0",
+            )
+        added = git(repo, add, env=add_env)
         if not added.ok:
             info["error"] = added.err
             return info
@@ -649,6 +777,14 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
                 )
             )
             lines.append("  `%s`" % restore_line(snap["repo"], snap["ref"]))
+            skipped = snap.get("skipped") or []
+            if skipped:
+                names = ", ".join(skipped[:5])
+                if len(skipped) > 5:
+                    names += " and %d more" % (len(skipped) - 5)
+                lines.append(
+                    "  not saved (over %g MB): %s" % (snap["max_mb"], _one_line(names, 300))
+                )
             last = git(snap["repo"], ["log", "-1", "--format=%s"])
             if last.ok and last.out:
                 lines.append("  last commit: %s" % _one_line(last.out, 120))
@@ -747,7 +883,8 @@ def cmd_shutdown(args):
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
     message = "hestia shutdown %s" % now.strftime("%Y-%m-%d %H:%M:%S")
     snapshots = [
-        snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
+        snapshot_repo(repo, "refs/hestia/%s" % stamp, message, max_mb=cfg.get("snapshot_max_mb"))
+        for repo in repos
     ]
 
     if args.keep_agents:
@@ -883,7 +1020,8 @@ def cmd_break(args):
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
     message = "hestia break %s" % now.strftime("%Y-%m-%d %H:%M:%S")
     snapshots = [
-        snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
+        snapshot_repo(repo, "refs/hestia/%s" % stamp, message, max_mb=cfg.get("snapshot_max_mb"))
+        for repo in repos
     ]
     saved = [s for s in snapshots if s["ref"]]
 
@@ -2652,6 +2790,12 @@ def cmd_selftest(args):
         # Unsaved work, of both kinds.
         (repo / "README.md").write_text("committed and then edited\n")
         (repo / "scratch.txt").write_text("never committed\n")
+        # And a file over snapshot_max_mb that was never committed. hash-object
+        # without -w only names its blob; it doesn't store it.
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.json").write_text(json.dumps({"snapshot_max_mb": 0.01}))
+        (repo / "big.bin").write_bytes(os.urandom(20000))
+        big_blob = rungit(["hash-object", "big.bin"]).stdout.decode().strip()
 
         head_before = rungit(["rev-parse", "HEAD"]).stdout.decode().strip()
         status_before = rungit(["status", "--porcelain"]).stdout.decode()
@@ -2678,6 +2822,12 @@ def cmd_selftest(args):
         ref = result["snapshots"][0]["ref"]
         show = rungit(["show", "%s:scratch.txt" % ref]).stdout.decode()
         check("uncommitted file is recoverable", show.strip() == "never committed")
+        check("snapshot skips large untracked files",
+              result["snapshots"][0].get("skipped") == ["big.bin"]
+              and bool(big_blob)
+              and rungit(["cat-file", "-e", big_blob]).returncode != 0
+              and "not saved (over 0.01 MB): big.bin"
+              in Path(result["tomorrow"]).read_text(encoding="utf-8"))
 
         check("tomorrow's list written", Path(result["tomorrow"]).exists())
 
