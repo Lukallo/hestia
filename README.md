@@ -96,6 +96,7 @@ banked at night and relit in the morning lasts. Hestia doesn't help you burn bri
 
 - [`PLAN.md`](PLAN.md): the design, the research behind it, and the audit of every feature against the "give time back" rule.
 - [`assets/BRAND.md`](assets/BRAND.md): the visual identity, palette and icon rules.
+- [`REFERENCE.md`](REFERENCE.md): projects we learned from, and what we took from each.
 
 Built for the Claude Impact Lab hackathon, against the brief's "shutdown command" idea, with a workload tracker and
 "learning AI together" folded in.
