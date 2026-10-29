@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `47/47 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `48/48 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 47 checks, 114 tests
+## Prove it: 48 checks, 118 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -419,24 +419,25 @@ PASS new degrades cleanly offline
 PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
+PASS CLAUDE.md section stays inside its budget
 PASS init remove restores CLAUDE.md exactly
 PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-47/47 checks passed
+48/48 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 114 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 118 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 114 tests in 16.280s
+Ran 118 tests in 19.181s
 
 OK
 ```

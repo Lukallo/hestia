@@ -1,7 +1,7 @@
 {
   "name": "hestia",
   "description": "End the working day: save open work, write tomorrow's list, pause agents until morning, and take real breaks.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "license": "MIT",
   "author": {
     "name": "Lukallo"
