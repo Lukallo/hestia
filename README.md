@@ -30,7 +30,15 @@ In Claude Code:
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`. No other dependencies: the engine is standard library only. At the end of the day, type:
+Needs `git` and `python3`. No other dependencies: the engine is standard library only.
+
+Once, to set up (about a minute; every question is skippable and has a default):
+
+```text
+/hestia:init
+```
+
+At the end of the day, type:
 
 ```text
 /hestia:done
@@ -44,7 +52,12 @@ That's it. You get:
 ├── pause.json      when the pause or break lifts (gone after /hestia:back)
 ├── handover.json   makes sure the morning handover happens only once
 ├── digest.json     the last Claude Code version /hestia:new told you about
-└── config.json     optional, only if you create it
+├── profile.json    your answers from /hestia:init
+├── connectors.json which connectors Hestia may use, asked once each
+└── config.json     your working days and resume hour
+
+~/.claude/CLAUDE.md
+└── a short "Hestia: about me" section, between its own markers
 
 <each repo you touched today>
 └── refs/hestia/<timestamp>   a snapshot of your uncommitted work
@@ -76,10 +89,11 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Seven commands, two hooks, nothing else
+## Eight commands, two hooks, nothing else
 
 | | Command | What happens |
 |---|---|---|
+| <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
 | <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
 | <img src="assets/icons/rest.svg" width="40" alt="Rest: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list, because the day isn't over |
 | <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts a pause or break early, and reminds you of the one thing you were mid-way through |
@@ -261,14 +275,17 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
+| Config | `~/.hestia/config.json` | delete it |
+| Your answers | `~/.hestia/profile.json` | delete it |
+| Connector choices | `~/.hestia/connectors.json` | delete it, or re-run `/hestia:init` to change a choice |
+| About-me section | `~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->` | `/hestia:init remove` puts the file back byte for byte (a backup is kept in `~/.hestia/backups/`) |
 | Dashboard page | `~/.hestia/dashboard.html`, only after `/hestia:dashboard` | delete it |
-| Config | `~/.hestia/config.json` (optional) | delete it |
 
-It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything. `/hestia:new` is the only piece that uses the network, and only to read Claude Code's public changelog.
+It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything. `/hestia:new` is the only piece that uses the network, and only to read Claude Code's public changelog. It only touches `CLAUDE.md` inside its own markers, and only when you run `/hestia:init`.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 29 checks, 45 tests
+## Prove it: 32 checks, 60 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -308,20 +325,23 @@ PASS why reads today's commits
 PASS new shows only what changed
 PASS new is quiet when nothing changed
 PASS new degrades cleanly offline
+PASS init writes profile, config and connectors
+PASS init keeps CLAUDE.md outside its markers
+PASS init remove restores CLAUDE.md exactly
 
-29/29 checks passed
+32/32 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 45 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 60 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 45 tests in 2.568s
+Ran 60 tests in 6.238s
 
 OK
 ```
@@ -343,7 +363,7 @@ The time it saves is the stashing, the "where was I?" note, the morning re-orien
 
 ## Scope
 
-All six commands that [PLAN.md](PLAN.md) designs are built, plus `/hestia:dashboard`, which was added later. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
+All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. The automatic pieces it describes beyond the two hooks are not: the opt-in lunch break, the recap on your first prompt after a break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
 
 ## Honest limitations
 

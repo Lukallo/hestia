@@ -9,14 +9,18 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py today [--json]                                (alias: status)
     hestia.py why   [--days N] [--repo PATH] [--json]       facts for "what was this for"
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
+    hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
+    hestia.py connector NAME [--present] [--set allowed|declined]
     hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
-    HESTIA_HOME      state directory, default ~/.hestia
-    HESTIA_LOG_DIR   Claude Code project logs, default ~/.claude/projects
+    HESTIA_HOME           state directory, default ~/.hestia
+    HESTIA_LOG_DIR        Claude Code project logs, default ~/.claude/projects
+    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
+    HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
 """
 
@@ -26,6 +30,7 @@ import html
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1491,6 +1496,449 @@ def cmd_new(args):
     return 0
 
 
+# init: get to know the user, once
+# --------------------------------------------------------------------------
+
+SECTION_START = "<!-- hestia:start -->"
+SECTION_END = "<!-- hestia:end -->"
+
+# First match wins. Covers the connectors in connectors/README.md; anything
+# else is recorded as "other" rather than guessed. Microsoft 365 counts as a
+# calendar because that's the part Hestia would read.
+CONNECTOR_KINDS = [
+    ("calendar", ("calendar", "gcal", "reclaim", "calendly", "cal.com", "microsoft 365", "microsoft_365", "m365")),
+    ("email", ("gmail", "outlook", "mail")),
+    ("chat", ("slack", "discord", "imessage", "teams", "telegram", "whatsapp")),
+    ("tasks", ("linear", "jira", "atlassian", "asana", "monday", "clickup", "todoist", "ticktick", "trello")),
+    ("code", ("github", "gitlab", "bitbucket")),
+    ("docs", ("notion", "drive", "docs", "sheets", "slides", "confluence", "dropbox")),
+]
+
+TONES = {
+    "plain": "Keep it short and plain.",
+    "warm": "Be warm and encouraging, but brief.",
+    "detail": "Detail is welcome when I ask how something works.",
+}
+
+CONSENTS = ("allowed", "declined", "unasked")
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def claude_dir():
+    return Path(os.environ.get("HESTIA_CLAUDE_DIR") or (Path.home() / ".claude"))
+
+
+def claude_json_path():
+    return Path(os.environ.get("HESTIA_CLAUDE_JSON") or (Path.home() / ".claude.json"))
+
+
+def claude_md_path():
+    return claude_dir() / "CLAUDE.md"
+
+
+def connectors_path():
+    return hestia_home() / "connectors.json"
+
+
+def profile_path():
+    return hestia_home() / "profile.json"
+
+
+def connector_key(server):
+    """'claude_ai_Google_Calendar' -> 'google-calendar'."""
+    name = re.sub(r"^(claude[_ .]ai[_ ]|plugin:[^:]*:)", "", server.strip(), flags=re.I)
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "unnamed"
+
+
+def display_name(server):
+    """'claude_ai_Google_Calendar' -> 'Google Calendar', for people to read."""
+    name = re.sub(r"^(claude[_ .]ai[_ ]|plugin:[^:]*:)", "", server.strip(), flags=re.I)
+    return name.replace("_", " ").strip() or server
+
+
+def classify_connector(server):
+    lowered = server.lower()
+    for kind, words in CONNECTOR_KINDS:
+        if any(word in lowered for word in words):
+            return kind
+    return "other"
+
+
+def tool_prefix(server):
+    """Claude Code names MCP tools mcp__<server>__<tool>."""
+    return "mcp__%s__" % re.sub(r"[^A-Za-z0-9_-]", "_", server)
+
+
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def detect_connectors(cwd, seen=()):
+    """MCP servers this user has, keyed by a stable slug.
+
+    Configured servers come from Claude Code's own files. claude.ai connectors
+    aren't in any file, so the command passes the servers Claude can see.
+    """
+    found = {}
+
+    def add(server, source):
+        key = connector_key(server)
+        if key in found:
+            return
+        found[key] = {
+            "server": server,
+            "name": display_name(server),
+            "kind": classify_connector(server),
+            "source": source,
+            "status": "available",
+            "tool_prefix": tool_prefix(server),
+        }
+
+    config = read_json(claude_json_path()) or {}
+    for server in (config.get("mcpServers") or {}):
+        add(server, "user")
+    for path, project in (config.get("projects") or {}).items():
+        if isinstance(project, dict) and _same_path(path, cwd):
+            for server in (project.get("mcpServers") or {}):
+                add(server, "local")
+    for server in ((read_json(Path(cwd) / ".mcp.json") or {}).get("mcpServers") or {}):
+        add(server, "project")
+    for server in seen:
+        server = server.strip()
+        if server:
+            add(server, "claude.ai" if re.match(r"claude[_ .]ai", server, re.I) else "session")
+    return found
+
+
+def usual_hours(now, days=14):
+    """Typical first and last prompt of the day, from recent logs."""
+    by_day = {}
+    for prompt in read_prompts(now - timedelta(days=days)):
+        local = prompt["at"].astimezone()
+        first, last = by_day.get(local.date(), (local, local))
+        by_day[local.date()] = (min(first, local), max(last, local))
+    if not by_day:
+        return None
+
+    def median_clock(times):
+        minutes = sorted(t.hour * 60 + t.minute for t in times)
+        middle = minutes[len(minutes) // 2]
+        return "%02d:%02d" % (middle // 60, middle % 60)
+
+    return {
+        "days_seen": len(by_day),
+        "usual_start": median_clock([first for first, _ in by_day.values()]),
+        "usual_end": median_clock([last for _, last in by_day.values()]),
+    }
+
+
+def _find_program(name):
+    found = shutil.which(name)
+    if found or name != "gh":
+        return found
+    # The GitHub CLI installer doesn't always reach PATH in an open shell.
+    for folder in (os.environ.get("ProgramFiles", ""), "/opt/homebrew/bin", "/usr/local/bin"):
+        candidate = Path(folder) / ("GitHub CLI/gh.exe" if os.name == "nt" else "gh")
+        if folder and candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _run_quiet(args, timeout=5):
+    program = _find_program(args[0])
+    if not program:
+        return ""
+    try:
+        proc = subprocess.run([program] + list(args[1:]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+def detect_environment(cwd, seen=(), now=None):
+    """Everything init can learn without asking, so it only asks the rest."""
+    now = now or datetime.now().astimezone()
+    md = claude_md_path()
+    md_text = md.read_bytes().decode("utf-8", "replace") if md.exists() else ""
+    gh = re.search(r"account (\S+)", _run_quiet(["gh", "auth", "status"]))
+    return {
+        "name": _run_quiet(["git", "config", "--global", "user.name"]) or None,
+        "github_login": gh.group(1) if gh else None,
+        "hours": usual_hours(now),
+        "claude_md": {
+            "path": str(md),
+            "exists": md.exists(),
+            "has_hestia_section": SECTION_START in md_text,
+        },
+        "config": load_config(),
+        "profile": read_json(profile_path()),
+        "connectors": detect_connectors(cwd, seen),
+        "consent": {
+            key: entry.get("consent", "unasked")
+            for key, entry in ((read_json(connectors_path()) or {}).get("connectors") or {}).items()
+        },
+    }
+
+
+def _days_label(days):
+    days = sorted(set(days))
+    if days == list(range(days[0], days[-1] + 1)) and len(days) > 1:
+        return "%s-%s" % (DAY_NAMES[days[0]], DAY_NAMES[days[-1]])
+    return ", ".join(DAY_NAMES[d] for d in days)
+
+
+def render_claude_section(profile, cfg, connectors):
+    """The block that lives in ~/.claude/CLAUDE.md. Short: it loads every session."""
+    lines = [SECTION_START, "## Hestia: about me", ""]
+    if profile.get("name"):
+        lines.append("- Name: %s." % profile["name"])
+    if profile.get("why"):
+        lines.append("- I build because: %s." % profile["why"].rstrip("."))
+    if profile.get("helps"):
+        lines.append("- Right now my work helps: %s." % profile["helps"].rstrip("."))
+    lines.append(
+        "- When you explain a change, say what it does for people first, then how. %s"
+        % TONES.get(profile.get("tone"), TONES["plain"])
+    )
+    lines.append(
+        "- My working days are %s. Hestia pauses agents overnight and resumes at %02d:00; "
+        "after I run /hestia:done, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
+    )
+    allowed = sorted(c["name"] for c in connectors.values() if c.get("consent") == "allowed")
+    lines.append(
+        "- Connectors Hestia may use: %s. Don't suggest installing others."
+        % (", ".join(allowed) if allowed else "none")
+    )
+    lines += ["", "<!-- Written by /hestia:init. Re-run it to change this; remove with: hestia.py init remove -->", SECTION_END]
+    return "\n".join(lines)
+
+
+def _find_section(text):
+    start = text.find(SECTION_START)
+    if start < 0:
+        return None
+    end = text.find(SECTION_END, start)
+    if end < 0:
+        raise ValueError("CLAUDE.md has a Hestia start marker but no end marker; fix it by hand")
+    return start, end + len(SECTION_END)
+
+
+def _backup(path):
+    if path.exists():
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        target = hestia_home() / "backups" / ("CLAUDE.md." + stamp)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(path), str(target))
+
+
+def upsert_marked_section(path, block):
+    """Insert or replace the Hestia block. Text outside the markers is kept byte for byte.
+
+    The block is always joined with a single newline on each side, so
+    remove_marked_section can take it out again exactly.
+    """
+    path = Path(path)
+    text = path.read_bytes().decode("utf-8") if path.exists() else ""
+    span = _find_section(text)
+    if span:
+        updated = text[: span[0]] + block + text[span[1]:]
+    elif text:
+        updated = text + "\n" + block + "\n"
+    else:
+        updated = block + "\n"
+    if updated != text:
+        _backup(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(updated.encode("utf-8"))
+    return updated != text
+
+
+def remove_marked_section(path):
+    path = Path(path)
+    if not path.exists():
+        return False
+    text = path.read_bytes().decode("utf-8")
+    span = _find_section(text)
+    if not span:
+        return False
+    block = text[span[0]:span[1]]
+    for joined in ("\n" + block + "\n", block + "\n", block):
+        if joined in text:
+            text = text.replace(joined, "", 1)
+            break
+    _backup(path)
+    if text:
+        path.write_bytes(text.encode("utf-8"))
+    else:
+        path.unlink()  # we created it, so leave nothing behind
+    return True
+
+
+def _clean_answers(raw):
+    answers = {}
+    for field in ("name", "why", "helps"):
+        value = str(raw.get(field) or "").strip()
+        if value:
+            answers[field] = value[:200]
+    if raw.get("tone") in TONES:
+        answers["tone"] = raw["tone"]
+    hour = raw.get("resume_hour")
+    if isinstance(hour, int) and 0 <= hour <= 23:
+        answers["resume_hour"] = hour
+    days = raw.get("working_days")
+    if isinstance(days, list) and days and all(isinstance(d, int) and 0 <= d <= 6 for d in days):
+        answers["working_days"] = sorted(set(days))
+    consent = raw.get("connectors") or {}
+    answers["connectors"] = {
+        connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
+    }
+    return answers
+
+
+def init_write(answers, cwd, seen=(), now=None):
+    """Save the answers everywhere Hestia and Claude read them. Returns what was written."""
+    now = now or datetime.now().astimezone()
+    answers = _clean_answers(answers)
+    detected = detect_environment(cwd, seen, now)
+
+    profile = dict(detected["profile"] or {})
+    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone") if k in answers})
+    profile.setdefault("name", detected["name"])
+    profile.setdefault("tone", "plain")
+    profile["github_login"] = detected["github_login"]
+    profile["hours"] = detected["hours"]
+    profile["updated_at"] = now.isoformat()
+    write_json(profile_path(), profile)
+
+    config_file = hestia_home() / "config.json"
+    raw_config = read_json(config_file) or {}
+    for field in ("resume_hour", "working_days"):
+        if field in answers:
+            raw_config[field] = answers[field]
+    write_json(config_file, raw_config)
+
+    # Re-running init is the one place a "no" can turn into a "yes".
+    connectors = detected["connectors"]
+    for key, entry in connectors.items():
+        entry["consent"] = answers["connectors"].get(key, "unasked")
+        entry["asked_at"] = now.isoformat() if key in answers["connectors"] else None
+    kinds_present = {entry["kind"] for entry in connectors.values()}
+    write_json(
+        connectors_path(),
+        {
+            "version": 1,
+            "checked_at": now.isoformat(),
+            "connectors": connectors,
+            "missing_kinds": [kind for kind, _ in CONNECTOR_KINDS if kind not in kinds_present],
+        },
+    )
+
+    block = render_claude_section(profile, load_config(), connectors)
+    upsert_marked_section(claude_md_path(), block)
+    return {
+        "profile": str(profile_path()),
+        "config": str(config_file),
+        "connectors": str(connectors_path()),
+        "claude_md": str(claude_md_path()),
+        "allowed": sorted(e["name"] for e in connectors.values() if e["consent"] == "allowed"),
+    }
+
+
+def _seen_list(value):
+    return [part for part in re.split(r"[,\s]+", value or "") if part]
+
+
+def cmd_init(args):
+    cwd = os.getcwd()
+    seen = _seen_list(args.seen)
+    if args.action == "remove":
+        removed = remove_marked_section(claude_md_path())
+        print("Removed the Hestia section from %s." % claude_md_path() if removed
+              else "No Hestia section in %s; nothing to remove." % claude_md_path())
+        print("Profile and connector choices are kept in %s; delete that folder to forget them." % hestia_home())
+        return 0
+
+    if args.action == "write":
+        raw = sys.stdin.read() if args.answers == "-" else args.answers
+        try:
+            answers = json.loads(raw or "{}")
+        except ValueError as exc:
+            print("--answers is not valid JSON: %s" % exc, file=sys.stderr)
+            return 1
+        if not isinstance(answers, dict):
+            print("--answers must be a JSON object", file=sys.stderr)
+            return 1
+        try:
+            written = init_write(answers, cwd, seen)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(written, indent=2))
+            return 0
+        print("Hestia knows you now: %s" % written["profile"])
+        print("Every session will see it: section added to %s" % written["claude_md"])
+        print("Connectors allowed: %s. Undo with: hestia.py init remove"
+              % (", ".join(written["allowed"]) or "none"))
+        return 0
+
+    detected = detect_environment(cwd, seen)
+    if args.json:
+        print(json.dumps(detected, indent=2, default=str))
+        return 0
+    hours = detected["hours"]
+    print("Name: %s" % (detected["name"] or "unknown"))
+    print("GitHub: %s" % (detected["github_login"] or "not logged in"))
+    print("Usual day: %s" % ("%s to %s, over %d days" % (hours["usual_start"], hours["usual_end"], hours["days_seen"])
+                             if hours else "no history yet"))
+    print("Connectors: %s" % (", ".join(sorted(detected["connectors"])) or "none found"))
+    print("CLAUDE.md: %s" % ("has a Hestia section" if detected["claude_md"]["has_hestia_section"]
+                             else "exists" if detected["claude_md"]["exists"] else "not created yet"))
+    return 0
+
+
+def cmd_connector(args):
+    """The gate the connectors work calls before touching a connector.
+
+    Exit 0: allowed, go ahead. Exit 10: never asked, ask once now and record
+    the answer with --set. Exit 1: declined or not there, skip silently.
+    """
+    state = read_json(connectors_path()) or {"version": 1, "connectors": {}, "missing_kinds": []}
+    connectors = state.setdefault("connectors", {})
+    key = connector_key(args.name)
+    entry = connectors.get(key)
+    now = datetime.now().astimezone().isoformat()
+
+    if entry is None and (args.present or args.set):
+        # Appeared after init: it gets exactly one question, like the others did.
+        entry = connectors[key] = {
+            "server": args.name,
+            "name": display_name(args.name),
+            "kind": classify_connector(args.name),
+            "source": "session",
+            "status": "available",
+            "tool_prefix": tool_prefix(args.name),
+            "consent": "unasked",
+            "asked_at": None,
+        }
+
+    if args.set:
+        entry["consent"] = args.set
+        entry["asked_at"] = now
+        write_json(connectors_path(), state)
+        print(args.set)
+        return 0
+
+    if entry is None:
+        print("missing")
+        return 1
+    if args.present:
+        write_json(connectors_path(), state)
+    consent = entry.get("consent", "unasked")
+    print(consent if consent != "unasked" else "ask")
+    return {"allowed": 0, "unasked": 10}.get(consent, 1)
+
+
 # --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
@@ -1533,6 +1981,8 @@ def cmd_selftest(args):
         env = os.environ.copy()
         env["HESTIA_HOME"] = str(home)
         env["HESTIA_LOG_DIR"] = str(logs)
+        env["HESTIA_CLAUDE_DIR"] = str(tmp / "claude")
+        env["HESTIA_CLAUDE_JSON"] = str(tmp / "claude.json")
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "hestia selftest"
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "selftest@hestia.local"
 
@@ -1681,6 +2131,21 @@ def cmd_selftest(args):
         proc = run(["new"])
         check("new degrades cleanly offline",
               proc.returncode == 0 and "nothing to do" in proc.stdout.decode())
+        # init: writes the shared context, and leaves the user's own CLAUDE.md alone.
+        claude_md = tmp / "claude" / "CLAUDE.md"
+        claude_md.parent.mkdir()
+        original = b"# My notes\r\nKeep these exactly.\r\n"
+        claude_md.write_bytes(original)
+        answers = {"why": "making things people use", "tone": "plain", "connectors": {"Google_Calendar": "allowed"}}
+        proc = run(["init", "write", "--seen", "Google_Calendar", "--answers", json.dumps(answers)])
+        written = all((home / name).exists() for name in ("profile.json", "config.json", "connectors.json"))
+        check("init writes profile, config and connectors", proc.returncode == 0 and written,
+              proc.stderr.decode().strip()[:200])
+        text = claude_md.read_bytes()
+        check("init keeps CLAUDE.md outside its markers", text.startswith(original)
+              and SECTION_START.encode() in text and b"making things people use" in text)
+        run(["init", "remove"])
+        check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 
     failed = [name for name, ok, _ in checks if not ok]
     print("")
@@ -1726,6 +2191,19 @@ def main(argv=None):
     p.add_argument("--since", default="", help="compare against this version instead")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_new)
+    p = sub.add_parser("init", help="get to know the user once: profile, CLAUDE.md section, connectors")
+    p.add_argument("action", nargs="?", default="detect", choices=["detect", "write", "remove"])
+    p.add_argument("--seen", default="", help="MCP server names Claude can see, comma separated")
+    p.add_argument("--answers", default="", help="write: the user's answers as a JSON object, or - for stdin")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("connector", help="may Hestia use this connector? exit 0 yes, 10 ask once, 1 no")
+    p.add_argument("name", help="connector key or MCP server name")
+    p.add_argument("--present", action="store_true", help="it exists right now, so record it if new")
+    p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
+    p.set_defaults(func=cmd_connector)
+
     p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
     p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
     p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
