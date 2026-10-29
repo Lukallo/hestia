@@ -211,6 +211,12 @@ class TestPauseAndHook(TempHome):
             "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
             'sh "/plugins/hestia/scripts/hestia" back',  # the launcher
             "sh '/plugins/hestia/scripts/hestia' today",
+            'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back',  # as back.md writes it
+            'bash "/plugins/hestia/scripts/hestia" today',
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" back',  # without the launcher
+            "python3 hestia.py today --json 2>&1",
+            "py -3 hestia.py back",
+            "./hestia.py back",
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
@@ -218,9 +224,13 @@ class TestPauseAndHook(TempHome):
                 "pause must not block: %s" % command,
             )
 
-    def test_never_blocks_the_way_back_in_from_powershell(self):
+    def test_way_back_in_from_powershell(self):
+        # Claude Code uses a PowerShell tool on Windows without Git Bash.
         self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
         for command in [
+            'python "$env:CLAUDE_PLUGIN_ROOT\\scripts\\hestia.py" back',
+            '& python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
+            '& "C:\\Python314\\python.exe" "C:\\hestia\\hestia.py" today',
             'python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
             "& python 'C:\\Program Files\\hestia\\scripts\\hestia.py' today",
         ]:
@@ -230,9 +240,55 @@ class TestPauseAndHook(TempHome):
                 "pause must not block: %s" % command,
             )
         self.assertEqual(
+            self.hook({"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item build"}}),
+            "deny",
+        )
+        self.assertEqual(
             self.hook({"tool_name": "PowerShell", "tool_input": {"command": "npm test"}}),
             "deny",
         )
+
+    def test_only_the_whole_command_gets_through(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in [
+            "python3 hestia.py today && git push",
+            "python3 hestia.py back; npm publish",
+            "python3 hestia.py status | sh",
+            "python3 hestia.py back || npm test",
+            "python3 hestia.py back & npm test",
+            "echo $(python3 hestia.py status; npm publish)",
+            "echo `python3 hestia.py back`",
+            "python3 hestia.py back\nrm -rf build",
+            "python3 hestia.py today > notes.txt",
+            'git commit -m "hestia back online" && git push',
+            'git commit -m "hestia back online"',
+            'python3 -c "import os" hestia.py back',
+            "python3 hestia.py done --keep-agents",  # not a way back in
+            "python3 hestia.py break 5m",
+            'sh "/plugins/hestia/scripts/hestia" back && git push',
+            'sh -c "git push" hestia back',
+            "sh deploy.sh hestia back",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
+                "deny",
+                "pause must block: %s" % command,
+            )
+
+    def test_blocks_connectors_subagents_and_other_plugins(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for tool in [
+            "mcp__claude_ai_Slack__slack_send_message",  # a claude.ai connector
+            "mcp__plugin_linear_linear__create_issue",  # a plugin's own MCP server
+            "Agent",  # starting a subagent
+            "Skill",
+            "WebFetch",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": tool, "tool_input": {}}),
+                "deny",
+                "pause must block: %s" % tool,
+            )
 
     def test_expired_pause_clears_itself(self):
         self.pause_until(datetime.now().astimezone() - timedelta(minutes=1))
@@ -920,6 +976,15 @@ class TestInitWrite(TempHome):
         profile = hestia.read_json(self.home / "profile.json")
         self.assertEqual((profile["why"], profile["tone"]), ("the craft itself", "detail"))
 
+    def test_the_screen_answer_is_kept_until_changed(self):
+        self.assertIsNone(hestia.load_config()["screen"], "unanswered until init asks")
+        self.write({"screen": False})
+        self.write({"why": "the craft itself"})  # skipped this time
+        self.write({"screen": "no"})  # not a yes or no, so ignored
+        self.assertIs(hestia.load_config()["screen"], False)
+        self.write({"screen": True})
+        self.assertIs(hestia.load_config()["screen"], True)
+
 
 class TestConnectorGate(TempHome):
     def gate(self, name, present=False, set_to=None):
@@ -1010,6 +1075,54 @@ class TestDashboard(TempHome):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
         self.assertFalse((self.home / "TOMORROW.md").exists())
+
+    def dashboard(self, **env_changes):
+        """Run the real CLI with a stand-in browser that only leaves a marker."""
+        browser = self.tmp / "browser.sh"
+        browser.write_text('#!/bin/sh\necho "$1" > "%s"\n' % (self.tmp / "opened"))
+        browser.chmod(0o755)
+        env = dict(os.environ, BROWSER=str(browser))
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            env.pop(name, None)
+        env.update(env_changes)
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "dashboard"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        marker = self.tmp / "opened"
+        opened = marker.exists()
+        if opened:
+            marker.unlink()
+        return proc.stdout.decode(), opened
+
+    def test_guesses_the_screen_from_the_display(self):
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            os.environ.pop(name, None)
+        os.environ["SSH_CONNECTION"] = "10.0.0.1 50000 10.0.0.2 22"
+        self.assertFalse(hestia.has_screen(), "a remote login opens nothing you can see")
+        os.environ["DISPLAY"] = ":0"
+        self.assertTrue(hestia.has_screen(), "a forwarded display can show a page")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_opens_a_browser_only_where_there_is_a_screen(self):
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertIn("Dashboard:", out)
+        self.assertFalse(opened, "no screen: write the page, open nothing")
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertTrue(opened)
+        hestia.write_json(self.home / "config.json", {"screen": True})
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertTrue(opened, "the answer from init beats the guess")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_off_when_init_says_there_is_no_screen(self):
+        hestia.write_json(self.home / "config.json", {"screen": False})
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertIn("No dashboard on this computer", out)
+        self.assertIn("/hestia:today", out)
+        self.assertFalse(opened)
+        self.assertFalse((self.home / "dashboard.html").exists(), "writes nothing at all")
 
 
 class TestEverythingUsesTheLauncher(unittest.TestCase):

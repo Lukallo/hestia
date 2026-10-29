@@ -48,7 +48,9 @@ correctness bug.
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
 | `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests. |
+| `tests/test_platforms.py` | What differs between Linux, macOS and Windows: text encodings, paths with spaces, the restore line in each shell, and the hooks as installed. |
 | `.github/workflows/test.yml` | CI: the selftest and unit tests on Linux, macOS and Windows (PowerShell), plus the selftest through the launcher in bash, which is Git Bash on Windows. |
+| `tests/compat/` | A live check that runs real `claude -p` sessions with Hestia, a stand-in connector (`fake_mcp.py`) and a stand-in plugin (`other/`). Not one of the three checks: it needs the `claude` CLI and costs a few cents. |
 | `README.md` | The public face, read by users and by an automated judge. Every output block in it is a real capture. |
 | `PLAN.md` | The design, the burnout research grounding, and the audit of what was cut and why. |
 | `assets/`, `assets/BRAND.md` | Banner, logo and icons, which are named by fire stage rather than by command. |
@@ -79,7 +81,7 @@ someone's work.
 | `/hestia:back` | `back` | deletes `pause.json` | After a break it prints restore lines; after `done` it points to the list |
 | `/hestia:today` | `today` | nothing | Only ever shown when asked |
 | `/hestia:init [remove]` | `init detect`, `init write`, `init remove`, `connector` | `profile.json`, `config.json`, `connectors.json`, `backups/`, and a marked section of `~/.claude/CLAUDE.md` | Run once. Never touches text outside its markers. `connector NAME` is the consent gate: exit 0 allowed, 10 ask once, 1 skip silently |
-| `/hestia:dashboard` | `dashboard` | `dashboard.html` only | The `today` reading as one static page: no scripts, no network, no refresh. Allowed while paused because it only reads |
+| `/hestia:dashboard` | `dashboard` | `dashboard.html` only, and nothing when `screen` is `false` | The `today` reading as one static page: no scripts, no network, no refresh. Allowed while paused because it only reads. Off when `init` was told there's no screen. With no answer, it only opens a browser if `has_screen()` finds a display |
 | `/hestia:why [who for]` | `why --json` | nothing | Facts only; Claude writes the paragraph |
 | `/hestia:new` | `new --json` | `digest.json` | The only network use; offline means "nothing to do" |
 
@@ -102,7 +104,7 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
 | `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `profile.json`, `connectors.json` | The answers and connector consent from `init` | Rewritten by `init`; `init remove` takes the CLAUDE.md section out |
-| `config.json` | `{resume_hour, working_days (Mon=0), repos}` | Optional; only the user creates it |
+| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen}`. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
 
 Snapshots live in each repo as `refs/hestia/<YYYY-MM-DD-HHMMSS>`. They are
 plain commits whose parent is `HEAD`. They are never on a branch.
@@ -138,7 +140,10 @@ the test.
    `HEAD` stay byte-identical. The engine builds the commit through a
    temporary `GIT_INDEX_FILE`. **Never** replace this with `git stash`,
    `git add` on the real index, or a commit on the user's branch.
-2. **The pause never blocks the way back in.** `RESUME_PATTERN` in
+2. **The pause never blocks the way back in, and nothing rides along with
+   it.** `is_way_back_in()` only lets a `Bash` or `PowerShell` command
+   through when it is one hestia call on its own: `SHELL_JOINERS` refuses
+   chaining, pipes, redirects, subshells and new lines. `RESUME_PATTERN` in
    `hestia.py` allowlists `back`/`resume`, `today`/`status` and the read-only
    `dashboard`, along with the hook commands. It applies to commands run
    through the Bash tool and, on Windows, the PowerShell tool. The hook tests
@@ -211,6 +216,12 @@ claude plugin validate .                            # Validation passed
 directory's submission checks. It currently reports a missing licence and a
 missing icon. Both are known, and choosing a licence is the maintainers'
 decision, not an agent's.
+
+When you change the hooks or the pause, also run `tests/compat/run.sh`. It
+checks that the pause holds next to a connector and another plugin, using a
+throwaway `HESTIA_HOME` for every scenario. Never run it in
+`bypassPermissions` mode, and re-capture its README block if its output
+changes.
 
 The tests need `git` and Python 3.9 or newer. They create everything in temp
 dirs and set `HESTIA_HOME` and `HESTIA_LOG_DIR` for every test. They also need a
@@ -332,6 +343,7 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | Licence | Missing. The maintainers must choose one |
 | PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
 | Remote agents | Only processes on this machine can be stopped |
+| Mods | A mod can approve a tool call the pause blocked, unless managed settings or a Team or Enterprise login is in place. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow. Documented in the README's limitations |
 
 ## 12. Troubleshooting
 
@@ -344,4 +356,5 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | `why` shows no commits for a repo with commits today | They were authored under a different identity from the one `git var GIT_AUTHOR_IDENT` reports there |
 | `new` always says nothing changed | `digest.json` already records the newest version. Delete it, or pass `--since` |
 | A hook error says "hestia: needs Python 3" | The launcher found no `python3` that runs and no `python`. Install Python 3, or put it on `PATH` |
+| `dashboard` says there's no dashboard on this computer | `config.json` has `"screen": false`, from `init`. Re-run `init`, or delete that key |
 | The selftest fails only on `why` | The commit identity differs from the git identity. The selftest sets `GIT_AUTHOR_EMAIL`; check nothing in your environment overrides it |
