@@ -104,7 +104,7 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
 | `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `profile.json`, `connectors.json` | The answers and connector consent from `init` | Rewritten by `init`; `init remove` takes the CLAUDE.md section out |
-| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen}`. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
+| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen, keep_snapshots_days, snapshot_max_mb}`. `keep_snapshots_days` is how many days `done` keeps a snapshot ref: 30 by default, and 0 or less keeps them all. `snapshot_max_mb` is the size above which untracked files stay out of snapshots: 50 by default, and 0 or less for no limit. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
 
 Snapshots live in each repo as `refs/hestia/<YYYY-MM-DD-HHMMSS>`. They are
 plain commits whose parent is `HEAD`. They are never on a branch.
@@ -112,6 +112,10 @@ plain commits whose parent is `HEAD`. They are never on a branch.
 ### Data sources
 
 - **Prompts** come from `~/.claude/projects/*/*.jsonl`, or `$HESTIA_LOG_DIR`.
+  When Claude Code runs with `CLAUDE_CONFIG_DIR`, the logs, auto memory,
+  `CLAUDE.md`, `settings.json` and `.claude.json` all live in that folder
+  instead, and Hestia follows it.
+  The `HESTIA_*` overrides still win.
   Only `type == "user"` entries with string content count. Sidechains,
   tool results and anything starting with `<` are skipped.
 - **Repos** are found from the `cwd` of today's prompts, the current folder
@@ -216,10 +220,10 @@ python3 -m unittest discover -s tests               # prints Ran N tests ... OK
 claude plugin validate .                            # Validation passed
 ```
 
-`claude plugin validate plugins/hestia` additionally runs the plugin
-directory's submission checks. It currently reports a missing licence and a
-missing icon. Both are known, and choosing a licence is the maintainers'
-decision, not an agent's.
+`claude plugin validate plugins/hestia --profile directory` additionally
+runs the plugin directory's submission checks. They pass: the licence is MIT
+(`LICENSE` at the repo root, `license` in `plugin.json`) and the icon is
+`plugins/hestia/.claude-plugin/icon.png`.
 
 When you change the hooks or the pause, also run `tests/compat/run.sh`. It
 checks that the pause holds next to a connector and another plugin, using a
@@ -247,6 +251,43 @@ Bash.
    changed.
 5. **Re-capture** every README block the change affects (see section 8).
 6. Update the check and test counts in the README heading and body.
+
+### Change the CLAUDE.md section
+
+`/hestia:init` writes a short "Hestia: about me" section into the user's
+`~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->`.
+It loads into **every** session in every project, so each line costs tokens
+forever. `render_claude_section()` in `hestia.py` is the only thing that writes
+it. Keep it efficient:
+
+- **Budget:** at most 8 bullets and `SECTION_MAX_CHARS` (800 characters),
+  markers included. `TestClaudeMdBudget` fills every answer at maximum length
+  and fails past that. Free-text answers are clipped to `SECTION_ANSWER_CHARS`.
+- **Every line must change how Claude behaves.** "Explain by what it does for
+  people first" earns its place. A fact Claude never acts on doesn't.
+- **Only what Claude can't learn elsewhere.** No git username, no paths, no
+  repo facts. A name goes in only if the person typed it (`name_given`).
+- **No command manuals.** Each command's `.md` describes itself. Name a command
+  only to tell Claude how to behave around it, for example "after
+  /hestia:done or during /hestia:break, don't suggest more work".
+- **Plain, imperative, one idea per bullet,** in the person's voice ("I work
+  Mon-Fri"), because it sits among their own notes.
+- **Never edit it from anywhere else.** If a new command changes how Claude
+  should behave, change the renderer, add a test, and the next `init` rewrites
+  the section. Outside the markers stays byte-identical (see the invariants).
+
+### Ship it to people who already installed
+
+Claude Code only updates an installed plugin when its version number
+changes. If anything under `plugins/hestia/` changes and the version stays
+the same, `claude plugin update hestia@hestia` says "already at the latest
+version" and keeps the old hooks and scripts.
+
+So bump `version` in `plugins/hestia/.claude-plugin/plugin.json` and
+`metadata.version` in `.claude-plugin/marketplace.json` together, in the PR
+that changes the plugin, or in one PR just before a release. A fresh install
+always gets the latest files whatever the number says. The bump is for
+everyone else.
 
 ### Add a command
 
@@ -343,8 +384,6 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | Gap | State |
 |---|---|
 | Windows | With Git for Windows, the hooks run in Git Bash and the pause works. Without it, Claude Code runs hooks in PowerShell, where the `sh` launcher can't start, so the pause isn't enforced; Hestia needs git anyway. Agent stopping uses `ps` and `SIGTERM`, which are POSIX only, so nothing is signalled |
-| Plugin icon | Missing. The directory wants a square PNG, 512 to 2048 px. SVG is not accepted, so `assets/logo.svg` needs rendering |
-| Licence | Missing. The maintainers must choose one |
 | PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
 | Remote agents | Only processes on this machine can be stopped |
 | Mods | A mod can approve a tool call the pause blocked, unless managed settings or a Team or Enterprise login is in place. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow. Documented in the README's limitations |

@@ -21,11 +21,14 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 
 Environment overrides (used by the tests and selftest):
     HESTIA_HOME           state directory, default ~/.hestia
-    HESTIA_LOG_DIR        Claude Code project logs, default ~/.claude/projects
-    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
+    HESTIA_LOG_DIR        Claude Code project logs, default <claude dir>/projects
+    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default <claude dir>
     HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
+                          (<claude dir>/.claude.json when CLAUDE_CONFIG_DIR is set)
+
+<claude dir> is $CLAUDE_CONFIG_DIR when Claude Code was started with it, else ~/.claude.
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
-    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
+    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default <claude dir>/projects
 """
 
 import argparse
@@ -36,6 +39,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,6 +54,11 @@ DEFAULT_WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday-Friday
 DEFAULT_BREAK_MINUTES = 45
 # A break longer than this is the end of the day, which is what `done` is for.
 MAX_BREAK_MINUTES = 4 * 60
+# `done` deletes refs/hestia snapshots older than this. 0 or less keeps them all.
+DEFAULT_KEEP_SNAPSHOTS_DAYS = 30
+# Untracked files bigger than this stay out of snapshots, so every `done` and
+# `break` doesn't copy them into .git/objects again. 0 or less means no limit.
+DEFAULT_SNAPSHOT_MAX_MB = 50
 
 CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
 # `new` hands Claude a bounded slice of the changelog, never the whole history.
@@ -86,8 +95,21 @@ def hestia_home():
     return Path(os.environ.get("HESTIA_HOME") or (Path.home() / ".hestia"))
 
 
+def claude_config_dir():
+    """Where Claude Code keeps its own files: CLAUDE_CONFIG_DIR, or ~/.claude.
+
+    People who run more than one Claude Code account set CLAUDE_CONFIG_DIR.
+    Claude Code then keeps the session logs, CLAUDE.md and .claude.json in
+    that folder, and passes the variable on to hooks.
+    """
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured).expanduser() if configured else None
+
+
 def log_dir():
-    return Path(os.environ.get("HESTIA_LOG_DIR") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_LOG_DIR"):
+        return Path(os.environ["HESTIA_LOG_DIR"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def load_config():
@@ -96,6 +118,8 @@ def load_config():
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
         "screen": None,  # set by init; None means guess with has_screen()
+        "keep_snapshots_days": DEFAULT_KEEP_SNAPSHOTS_DAYS,
+        "snapshot_max_mb": DEFAULT_SNAPSHOT_MAX_MB,
     }
     path = hestia_home() / "config.json"
     if path.exists():
@@ -137,18 +161,30 @@ def parse_ts(value):
     return dt.astimezone()
 
 
+def local_time(day, hour, minute=0):
+    """`day` at hour:minute on the local clock, with that day's UTC offset.
+
+    `now.replace(hour=...)` keeps today's offset, so a pause that crosses a
+    clock change would lift an hour early or late.
+    """
+    return datetime(day.year, day.month, day.day, hour, minute).astimezone()
+
+
 def next_resume(now, cfg):
-    """The next working morning at the configured hour."""
+    """The next working morning at the configured hour.
+
+    Before that hour, as with a `done` after midnight, this morning counts.
+    """
     hour = int(cfg.get("resume_hour", DEFAULT_RESUME_HOUR))
     days = cfg.get("working_days") or DEFAULT_WORKING_DAYS
-    candidate = (now + timedelta(days=1)).replace(
-        hour=hour, minute=0, second=0, microsecond=0
-    )
-    for _ in range(8):
-        if candidate.weekday() in days:
-            return candidate
-        candidate += timedelta(days=1)
-    return candidate
+    day = now.date()
+    if local_time(day, hour) <= now:
+        day += timedelta(days=1)
+    for _ in range(7):
+        if day.weekday() in days:
+            break
+        day += timedelta(days=1)
+    return local_time(day, hour)
 
 
 def parse_until(value, now, cfg):
@@ -158,16 +194,16 @@ def parse_until(value, now, cfg):
     match = re.match(r"^(\d{1,2}):(\d{2})$", text)
     if match:
         hour, minute = int(match.group(1)), int(match.group(2))
-        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if hour > 23 or minute > 59:
+            raise SystemExit("could not read --until %r (use HH:MM or an ISO timestamp)" % value)
+        candidate = local_time(now.date(), hour, minute)
         if candidate <= now:
-            candidate += timedelta(days=1)
+            candidate = local_time(now.date() + timedelta(days=1), hour, minute)
         return candidate
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         raise SystemExit("could not read --until %r (use HH:MM or an ISO timestamp)" % value)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=now.tzinfo)
     return dt.astimezone()
 
 
@@ -301,13 +337,113 @@ def index_fingerprint(repo):
     return hashlib.sha256(index.read_bytes()).hexdigest()
 
 
-def snapshot_repo(repo, ref, message):
+def snapshot_limit_mb(value):
+    """The snapshot size limit as a positive number of MB, or None for none."""
+    if value is None:
+        return None
+    try:
+        mb = float(value)
+    except (TypeError, ValueError):
+        mb = float(DEFAULT_SNAPSHOT_MAX_MB)
+    if not mb > 0 or mb == float("inf"):
+        return None
+    return mb
+
+
+def git_z(repo, args, env=None):
+    """Run git for NUL-separated output and return its fields as str paths.
+
+    os.fsdecode keeps names that aren't UTF-8 intact, so they can go straight
+    back to git or to the file system.
+    """
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    try:
+        proc = subprocess.run(
+            ["git"] + args,
+            cwd=str(repo),
+            env=full_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return [os.fsdecode(field) for field in proc.stdout.split(b"\0") if field]
+
+
+def untracked_over(repo, limit_bytes):
+    """Untracked, non-ignored files bigger than limit_bytes.
+
+    Returns (all untracked paths, the ones over the limit), relative to the
+    repo. It only stats files: nothing is read or hashed, so nothing reaches
+    .git/objects.
+    """
+    untracked = git_z(repo, ["ls-files", "--others", "--exclude-standard", "-z"]) or []
+    over = []
+    for name in untracked:
+        if name.endswith("/"):
+            continue  # an embedded repo: git saves it as a link, not its files
+        try:
+            st = (Path(repo) / name).lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size > limit_bytes:
+            over.append(name)
+    return untracked, over
+
+
+def entries_left_out(repo, untracked, over):
+    """How many `git status` entries hold nothing but files left out.
+
+    git status shows a new folder as one entry, so a folder counts only when
+    every untracked file in it was left out.
+    """
+    # No optional locks: status must not refresh .git/index mid-snapshot.
+    fields = git_z(repo, ["status", "--porcelain", "-z"], env={"GIT_OPTIONAL_LOCKS": "0"})
+    if not fields:
+        return 0
+    left_out = set(over)
+    count = 0
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if "R" in entry[:2] or "C" in entry[:2]:
+            index += 1  # a rename is followed by its old path
+        if not entry.startswith("?? "):
+            continue
+        path = entry[3:]
+        if path.endswith("/"):
+            inside = [name for name in untracked if name.startswith(path)]
+            if inside and all(name in left_out for name in inside):
+                count += 1
+        elif path in left_out:
+            count += 1
+    return count
+
+
+def display_path(name):
+    """A path from git_z as text that is safe to print or write as UTF-8."""
+    return os.fsencode(name).decode("utf-8", "replace")
+
+
+def snapshot_repo(repo, ref, message, max_mb=None):
     """Commit the working tree to a hestia ref without touching the repo.
 
     Uses a temporary index, so .git/index, the working tree and the current
     branch are all left exactly as they were. Returns a dict of facts.
+
+    With max_mb, untracked files bigger than that are left out and listed in
+    "skipped". They are never hashed, so they never reach .git/objects.
+    Tracked files are always saved, whatever their size. When every change
+    was left out, the ref still points at a commit with HEAD's tree, and
+    "dirty_files" is 0.
     """
     repo = Path(repo)
+    limit_mb = snapshot_limit_mb(max_mb)
     before_head = git(repo, ["rev-parse", "HEAD"])
     before_status = git(repo, ["status", "--porcelain"]).out
     before_index = index_fingerprint(repo)
@@ -321,12 +457,21 @@ def snapshot_repo(repo, ref, message):
         "ref": None,
         "commit": None,
         "clean": not dirty,
+        "skipped": [],
+        "max_mb": limit_mb,
         "untouched": True,
         "error": None,
     }
 
     if not dirty:
         return info
+
+    over = []
+    if limit_mb is not None:
+        untracked, over = untracked_over(repo, int(limit_mb * 1024 * 1024))
+        if over:
+            info["dirty_files"] = max(0, len(dirty) - entries_left_out(repo, untracked, over))
+            info["skipped"] = sorted(display_path(name) for name in over)
 
     handle, index_file = tempfile.mkstemp(prefix="hestia-index-")
     os.close(handle)
@@ -338,7 +483,21 @@ def snapshot_repo(repo, ref, message):
             if not read.ok:
                 info["error"] = read.err
                 return info
-        added = git(repo, ["add", "-A"], env=env)
+        add, add_env = ["add", "-A"], env
+        if over:
+            # Excluding them here, not after, is what keeps them out of
+            # .git/objects: `add` hashes every file it stages. literal makes
+            # * [ ? and a leading : plain characters in a file name.
+            add += ["--", "."] + [":(exclude,literal)%s" % name for name in over]
+            # The user's own pathspec settings must not turn that magic off.
+            add_env = dict(
+                env,
+                GIT_LITERAL_PATHSPECS="0",
+                GIT_GLOB_PATHSPECS="0",
+                GIT_NOGLOB_PATHSPECS="0",
+                GIT_ICASE_PATHSPECS="0",
+            )
+        added = git(repo, add, env=add_env)
         if not added.ok:
             info["error"] = added.err
             return info
@@ -637,6 +796,14 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
                 )
             )
             lines.append("  `%s`" % restore_line(snap["repo"], snap["ref"]))
+            skipped = snap.get("skipped") or []
+            if skipped:
+                names = ", ".join(skipped[:5])
+                if len(skipped) > 5:
+                    names += " and %d more" % (len(skipped) - 5)
+                lines.append(
+                    "  not saved (over %g MB): %s" % (snap["max_mb"], _one_line(names, 300))
+                )
             last = git(snap["repo"], ["log", "-1", "--format=%s"])
             if last.ok and last.out:
                 lines.append("  last commit: %s" % _one_line(last.out, 120))
@@ -735,7 +902,17 @@ def cmd_shutdown(args):
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
     message = "hestia shutdown %s" % now.strftime("%Y-%m-%d %H:%M:%S")
     snapshots = [
-        snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
+        snapshot_repo(repo, "refs/hestia/%s" % stamp, message, max_mb=cfg.get("snapshot_max_mb"))
+        for repo in repos
+    ]
+    # Old snapshots go, so refs/hestia doesn't grow forever. Clean repos are
+    # pruned too. The snapshots just taken never are.
+    just_taken = set(s["ref"] for s in snapshots if s["ref"])
+    just_taken.add("refs/hestia/%s" % stamp)
+    pruned = [
+        {"repo": str(repo), "ref": ref}
+        for repo in repos
+        for ref in prune_snapshots(repo, cfg.get("keep_snapshots_days"), now, keep=just_taken)
     ]
 
     if args.keep_agents:
@@ -776,6 +953,7 @@ def cmd_shutdown(args):
         },
         "agents_stopped": stopped,
         "agents_still_open": still_open,
+        "pruned": pruned,
         "errors": [s["error"] for s in snapshots if s["error"]],
         "integrity_ok": all(s["untouched"] for s in snapshots),
     }
@@ -871,7 +1049,8 @@ def cmd_break(args):
     stamp = now.strftime("%Y-%m-%d-%H%M%S")
     message = "hestia break %s" % now.strftime("%Y-%m-%d %H:%M:%S")
     snapshots = [
-        snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
+        snapshot_repo(repo, "refs/hestia/%s" % stamp, message, max_mb=cfg.get("snapshot_max_mb"))
+        for repo in repos
     ]
     saved = [s for s in snapshots if s["ref"]]
 
@@ -1146,6 +1325,57 @@ def list_snapshots(repos, limit=5):
                 found.append({"repo": str(repo), "ref": ref, "at": parse_ts(when)})
     found.sort(key=lambda s: s["at"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return found
+
+
+SNAPSHOT_NAME = re.compile(r"^refs/hestia/(\d{4}-\d{2}-\d{2}-\d{6})$")
+
+
+def snapshot_taken_at(ref):
+    """When a refs/hestia/<YYYY-MM-DD-HHMMSS> snapshot was taken, as local time.
+
+    None for any other name, so a ref Hestia didn't name is never pruned.
+    """
+    match = SNAPSHOT_NAME.match(ref)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y-%m-%d-%H%M%S").astimezone()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def prune_snapshots(repo, keep_days, now, keep=()):
+    """Delete refs/hestia snapshots more than keep_days old. Returns their names.
+
+    The age comes from the timestamp in the ref's name. A name that doesn't
+    parse, or a ref in `keep`, is left alone. keep_days of 0 or less, or one
+    that isn't a whole number, keeps everything. Only refs change: the working
+    tree, the index and HEAD are never touched.
+    """
+    if isinstance(keep_days, bool):
+        return []
+    try:
+        days = int(keep_days)
+        if days <= 0:
+            return []
+        cutoff = now - timedelta(days=days)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    listed = git(repo, ["for-each-ref", "refs/hestia", "--format=%(refname) %(objectname)"])
+    if not listed.ok:
+        return []
+    pruned = []
+    for line in listed.out.splitlines():
+        ref, _, sha = line.partition(" ")
+        if not ref or ref in keep:
+            continue
+        taken = snapshot_taken_at(ref)
+        if taken is None or taken >= cutoff:
+            continue
+        # Naming the old value leaves alone a ref that moved since it was listed.
+        if git(repo, ["update-ref", "-d", ref, sha]).ok:
+            pruned.append(ref)
+    return pruned
 
 
 def _timeline_svg(prompts, now, paused):
@@ -1991,11 +2221,16 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def claude_dir():
-    return Path(os.environ.get("HESTIA_CLAUDE_DIR") or (Path.home() / ".claude"))
+    if os.environ.get("HESTIA_CLAUDE_DIR"):
+        return Path(os.environ["HESTIA_CLAUDE_DIR"])
+    return claude_config_dir() or Path.home() / ".claude"
 
 
 def claude_json_path():
-    return Path(os.environ.get("HESTIA_CLAUDE_JSON") or (Path.home() / ".claude.json"))
+    if os.environ.get("HESTIA_CLAUDE_JSON"):
+        return Path(os.environ["HESTIA_CLAUDE_JSON"])
+    config = claude_config_dir()
+    return config / ".claude.json" if config else Path.home() / ".claude.json"
 
 
 def claude_md_path():
@@ -2154,29 +2389,36 @@ def _days_label(days):
     return ", ".join(DAY_NAMES[d] for d in days)
 
 
+# The section loads into every session, so it has a hard budget. Every line
+# must change how Claude behaves; see AGENTS.md, "The CLAUDE.md section".
+SECTION_MAX_CHARS = 800
+SECTION_ANSWER_CHARS = 100
+
+
 def render_claude_section(profile, cfg, connectors):
     """The block that lives in ~/.claude/CLAUDE.md. Short: it loads every session."""
-    lines = [SECTION_START, "## Hestia: about me", ""]
-    if profile.get("name"):
-        lines.append("- Name: %s." % profile["name"])
+    lines = [SECTION_START, "## Hestia: about me"]
+    if profile.get("name_given") and profile.get("name"):
+        lines.append("- Call me %s." % _one_line(profile["name"], 40).rstrip("."))
     if profile.get("why"):
-        lines.append("- I build because: %s." % profile["why"].rstrip("."))
+        lines.append("- I build because: %s." % _one_line(profile["why"], SECTION_ANSWER_CHARS).rstrip("."))
     if profile.get("helps"):
-        lines.append("- Right now my work helps: %s." % profile["helps"].rstrip("."))
+        lines.append("- My work helps: %s." % _one_line(profile["helps"], SECTION_ANSWER_CHARS).rstrip("."))
     lines.append(
-        "- When you explain a change, say what it does for people first, then how. %s"
+        "- Explain a change by what it does for people first, then how. %s"
         % TONES.get(profile.get("tone"), TONES["plain"])
     )
     lines.append(
-        "- My working days are %s. Hestia pauses agents overnight and resumes at %02d:00; "
-        "after I run /hestia:done, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
+        "- I work %s; Hestia resumes agents at %02d:00. After /hestia:done or during "
+        "/hestia:break, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
     )
     allowed = sorted(c["name"] for c in connectors.values() if c.get("consent") == "allowed")
     lines.append(
         "- Connectors Hestia may use: %s. Don't suggest installing others."
         % (", ".join(allowed) if allowed else "none")
     )
-    lines += ["", "<!-- Written by /hestia:init. Re-run it to change this; remove with: hestia.py init remove -->", SECTION_END]
+    lines += ["<!-- Written by /hestia:init. Re-run it to change this; /hestia:init remove takes it out. -->",
+              SECTION_END]
     return "\n".join(lines)
 
 
@@ -2274,6 +2516,8 @@ def init_write(answers, cwd, seen=(), now=None):
 
     profile = dict(detected["profile"] or {})
     profile.update({k: answers[k] for k in ("name", "why", "helps", "tone", "dream") if k in answers})
+    if "name" in answers:
+        profile["name_given"] = True  # typed by the person, so it goes in CLAUDE.md
     profile.setdefault("name", detected["name"])
     profile.setdefault("tone", "plain")
     profile.setdefault("dream", True)
@@ -2429,7 +2673,9 @@ LINK_PATTERN = re.compile(r"\]\(([^)\s]+\.md)\)")
 
 
 def memory_root():
-    return Path(os.environ.get("HESTIA_MEMORY_ROOT") or (Path.home() / ".claude" / "projects"))
+    if os.environ.get("HESTIA_MEMORY_ROOT"):
+        return Path(os.environ["HESTIA_MEMORY_ROOT"])
+    return (claude_config_dir() or Path.home() / ".claude") / "projects"
 
 
 def memory_slug(path):
@@ -2752,10 +2998,21 @@ def cmd_selftest(args):
         (repo / "README.md").write_text("committed\n")
         rungit(["add", "."])
         rungit(["commit", "-q", "-m", "first"])
+        # A snapshot from two months ago, past the 30-day limit.
+        old_snapshot = "refs/hestia/%s" % (
+            datetime.now().astimezone() - timedelta(days=60)
+        ).strftime("%Y-%m-%d-%H%M%S")
+        rungit(["update-ref", old_snapshot, "HEAD"])
 
         # Unsaved work, of both kinds.
         (repo / "README.md").write_text("committed and then edited\n")
         (repo / "scratch.txt").write_text("never committed\n")
+        # And a file over snapshot_max_mb that was never committed. hash-object
+        # without -w only names its blob; it doesn't store it.
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.json").write_text(json.dumps({"snapshot_max_mb": 0.01}))
+        (repo / "big.bin").write_bytes(os.urandom(20000))
+        big_blob = rungit(["hash-object", "big.bin"]).stdout.decode().strip()
 
         head_before = rungit(["rev-parse", "HEAD"]).stdout.decode().strip()
         status_before = rungit(["status", "--porcelain"]).stdout.decode()
@@ -2782,8 +3039,19 @@ def cmd_selftest(args):
         ref = result["snapshots"][0]["ref"]
         show = rungit(["show", "%s:scratch.txt" % ref]).stdout.decode()
         check("uncommitted file is recoverable", show.strip() == "never committed")
+        check("snapshot skips large untracked files",
+              result["snapshots"][0].get("skipped") == ["big.bin"]
+              and bool(big_blob)
+              and rungit(["cat-file", "-e", big_blob]).returncode != 0
+              and "not saved (over 0.01 MB): big.bin"
+              in Path(result["tomorrow"]).read_text(encoding="utf-8"))
 
         check("tomorrow's list written", Path(result["tomorrow"]).exists())
+
+        left = rungit(["for-each-ref", "--format=%(refname)", "refs/hestia"]).stdout.decode().split()
+        check("done prunes snapshots older than the limit",
+              old_snapshot not in left and ref in left
+              and [p["ref"] for p in result.get("pruned", [])] == [old_snapshot])
 
         # The pause blocks agent tool use...
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
@@ -2882,6 +3150,12 @@ def cmd_selftest(args):
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("expired pause clears itself", decision == "allow")
 
+        # Stopping after midnight still lets you back in this morning.
+        tuesday = datetime(2026, 10, 27, 1, 0).astimezone()
+        resume = next_resume(tuesday, {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]})
+        check("done after midnight resumes this morning",
+              (resume.date(), resume.hour) == (tuesday.date(), 8))
+
         # A midday break: the same pause, kind=break, no list, lifts itself.
         list_before = (home / "TOMORROW.md").read_bytes()
         handover_before = (home / "handover.json").read_bytes()
@@ -2955,6 +3229,8 @@ def cmd_selftest(args):
         check("no dashboard on a computer with no screen",
               proc.returncode == 0 and "/hestia:today" in proc.stdout.decode()
               and not (home / "dashboard.html").exists())
+        section = text[text.find(SECTION_START.encode()):]
+        check("CLAUDE.md section stays inside its budget", 0 < len(section.decode("utf-8")) <= SECTION_MAX_CHARS)
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 

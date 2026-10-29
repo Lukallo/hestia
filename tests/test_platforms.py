@@ -149,7 +149,8 @@ class TestAnyText(TempHome):
         self.hestia("init", "write", "--answers", "-", stdin=answers)
         text = md.read_bytes()
         self.assertTrue(text.startswith(original))
-        self.assertIn(("Right now my work helps: %s." % ANY_TEXT).encode("utf-8"), text)
+        self.assertIn(("My work helps: %s." % ANY_TEXT).encode("utf-8"), text)
+        self.assertIn("Call me Łukasz.".encode("utf-8"), text)
         self.hestia("init", "remove")
         self.assertEqual(md.read_bytes(), original)
 
