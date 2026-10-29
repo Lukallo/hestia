@@ -1,6 +1,16 @@
-# hearth: keep up with your AI tools without losing the reason you do the work
+# Hestia: keep up with your AI tools without losing the reason you do the work
 
-> Status: plan only. Nothing is built yet. "hearth" is a working name.
+> Status: plan only. Nothing is built yet.
+
+## Why "Hestia"
+
+Hestia is the Greek goddess of the hearth. Her one job was to **keep the fire going**: every home and city kept
+her flame alight, and it was never allowed to go out. That's the opposite of burnout. A fire that burns too hot
+burns out; a fire that's tended, banked at night and relit in the morning lasts.
+
+That's what this tool does. It doesn't help you burn brighter. It tends the fire: it banks it at the end of the day
+(`/hestia:shutdown`), keeps it safe overnight (agents paused), and relights it in the morning (yesterday's list,
+ready). It also keeps you close to the warm part of the work, who it's for and why you started (`/hestia:plain`).
 
 ## The problem
 
@@ -8,7 +18,7 @@ Compression burnout: AI tools squeeze more work into the same hours. Agents keep
 release to keep up with, and the work gets so technical you lose touch with the *romantic* part: who it's
 for and why you started.
 
-### What burnout is, and which part each piece of hearth answers
+### What burnout is, and which part each piece of Hestia answers
 
 The WHO (ICD-11) describes burnout as the result of **chronic workplace stress that hasn't been successfully managed**. It's a work problem, not a medical diagnosis, and it has three parts: **exhaustion**, **cynicism** (pulling away from the work) and **feeling ineffective**. A hard day you sleep off is fatigue. Burnout is when recovery stops keeping up, for weeks or months.
 
@@ -18,7 +28,7 @@ Two research models explain most of it:
 
 The root change with AI is that **starting and finishing a task became nearly free**. This is how that maps onto the causes, and which piece answers each one. The mapping is our reasoning, not settled research.
 
-| What AI compression does | Cause | Part of burnout | hearth piece |
+| What AI compression does | Cause | Part of burnout | Hestia piece |
 |---|---|---|---|
 | The waits disappear (builds, searches, first drafts), and so do the breaks they gave for free | Recovery | Exhaustion | "While you were away" in `status`: step away during a long run instead of watching it |
 | The day has no natural end: stopping becomes a choice against a next task that costs nothing | Recovery (detaching) | Exhaustion | `shutdown`, the pause, the finish point |
@@ -46,12 +56,12 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 
 | | What it does | Replaces (the time it gives back) |
 |---|---|---|
-| `/hearth:shutdown [note]` | Saves open work safely, writes tomorrow's list, pauses agents until morning | Manual stashing/WIP commits, "where was I?" notes, agents running overnight |
-| `/hearth:resume` | Lifts the pause early | n/a (the escape hatch) |
-| `/hearth:status` | Shows whether you're paused, plus today's load: projects, hours from first to last prompt, last real break, unsaved repos | Guessing how much you've taken on |
-| `/hearth:plain [target]` | One plain paragraph: who this work helps and what changed for them. Use it for yourself or to paste into an update for a non-technical person | Writing status updates by hand; losing the "why" |
-| `/hearth:digest` | Shows only what changed in Claude Code since your version or the last digest, then picks the **one** thing relevant to how you work, in five lines | Reading every release note to keep up |
-| *auto* pause | While paused, a `PreToolUse` hook blocks agent tool use: "Clocked out until Mon 08:00, `/hearth:resume` if urgent" | Overnight agent creep |
+| `/hestia:shutdown [note]` | Saves open work safely, writes tomorrow's list, pauses agents until morning | Manual stashing/WIP commits, "where was I?" notes, agents running overnight |
+| `/hestia:resume` | Lifts the pause early | n/a (the escape hatch) |
+| `/hestia:status` | Shows whether you're paused, plus today's load: projects, hours from first to last prompt, last real break, unsaved repos | Guessing how much you've taken on |
+| `/hestia:plain [target]` | One plain paragraph: who this work helps and what changed for them. Use it for yourself or to paste into an update for a non-technical person | Writing status updates by hand; losing the "why" |
+| `/hestia:digest` | Shows only what changed in Claude Code since your version or the last digest, then picks the **one** thing relevant to how you work, in five lines | Reading every release note to keep up |
+| *auto* pause | While paused, a `PreToolUse` hook blocks agent tool use: "Clocked out until Mon 08:00, `/hestia:resume` if urgent" | Overnight agent creep |
 | *auto* morning | The first session after the pause ends gets yesterday's list as context, **once** | 20 minutes of re-orientation each morning |
 
 ### Audit: does each piece strictly help, and could it hurt?
@@ -62,7 +72,7 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 | pause hook | Agents actually stop | Blocking *your* prompts would add a prompt, so we **only block agent tools**. You can still type, and Claude just can't act | **Keep**, agent tools only |
 | morning recap | Saves re-orientation time | Injecting context every session would be noise, so it fires **once**, after a pause | **Keep**, once only |
 | "what today was for" | Restores the romantic part | As a separate command it's one more thing to read, so it **merges into tomorrow's list** as its first line | **Merged** into shutdown |
-| plain | Replaces writing updates; keeps the why | Could be fluff, so it's grounded in real commits and prompts from `hearth.py` | **Keep** |
+| plain | Replaces writing updates; keeps the why | Could be fluff, so it's grounded in real commits and prompts from `hestia.py` | **Keep** |
 | load tracker | Lets you see your workload | As a dashboard or alert it would add attention cost, so it lives inside `status` and is **only shown when asked** | **Merged** into status |
 | digest | Keeping up without chasing | Network-dependent and could push *more* consumption, so it shows **one** item only, degrades cleanly offline, and shows nothing when there's nothing new | **Keep**, tightly scoped |
 | separate `morning` / `why` / `load` commands | n/a | Sprawl | **Cut** |
@@ -77,7 +87,7 @@ No new commands: each addition lives inside a piece above. Nothing above changes
 | overnight fact: "Shut down 17:30, next agent activity 09:05, nothing ran overnight" | morning recap, `status` | Evidence for the time-back criterion, from logs we already read | Could turn into a score, so it's a plain fact: no totals, no comparisons, no streaks | **Keep**, fact only |
 | finish point | tomorrow's list (from `shutdown`), `status` | Gives the day an end without an alert. Shutdown answers *how* to stop; this answers *when* | Could feel like a quota, so it's only the list you wrote yourself, shown only when asked | **Merged** into shutdown + status |
 | "while you were away" | `status` | Step away during a long agent run and catch up in seconds, instead of watching it work | Could encourage running more agents at once, so it's only shown when asked and has no alerts | **Merged** into status |
-| save evening prompts | pause | A prompt typed while paused goes onto tomorrow's list instead of starting a conversation about work. Nothing is lost | Changes the "you can still type" decision above. Must always let `/hearth:` commands through | **Proposed**, needs agreement |
+| save evening prompts | pause | A prompt typed while paused goes onto tomorrow's list instead of starting a conversation about work. Nothing is lost | Changes the "you can still type" decision above. Must always let `/hestia:` commands through | **Proposed**, needs agreement |
 | separate `catchup` / `park` / `break` / `overtime` / `week` commands | n/a | Already covered by `status`, the list and `resume` | Sprawl | **Cut** |
 | strip above the prompt box showing progress (a mod) | n/a | Always-visible progress | A permanent dashboard, which breaks the one rule | **Never** |
 
@@ -87,11 +97,11 @@ No new commands: each addition lives inside a piece above. Nothing above changes
 
 ```
 .claude-plugin/marketplace.json
-plugins/hearth/
+plugins/hestia/
   .claude-plugin/plugin.json
   commands/   shutdown.md resume.md status.md plain.md digest.md
   hooks/hooks.json            # PreToolUse (pause), SessionStart (morning, once)
-  scripts/hearth.py           # deterministic engine + standalone CLI, stdlib only
+  scripts/hestia.py           # deterministic engine + standalone CLI, stdlib only
 tests/                        # python -m unittest
 .github/workflows/test.yml    # tests on Windows, macOS and Linux
 README.md
@@ -100,31 +110,31 @@ README.md
 Install inside Claude Code:
 ```
 /plugin marketplace add Lukallo/claude-impact-lab-10-26
-/plugin install hearth@hearth
+/plugin install hestia@hestia
 ```
-Without Claude Code: `python plugins/hearth/scripts/hearth.py shutdown`.
+Without Claude Code: `python plugins/hestia/scripts/hestia.py shutdown`.
 
-- **`hearth.py`** handles the facts: snapshots, pause state, log parsing, load numbers and changelog diffing. It's testable with nothing mocked.
-- **The command `.md` files** have Claude do the language: phrasing the list, `plain` and the digest pick. Each one calls `hearth.py` for real data first.
+- **`hestia.py`** handles the facts: snapshots, pause state, log parsing, load numbers and changelog diffing. It's testable with nothing mocked.
+- **The command `.md` files** have Claude do the language: phrasing the list, `plain` and the digest pick. Each one calls `hestia.py` for real data first.
 
-> **Format note:** the current Claude Code docs call `commands/*.md` the older form and recommend `skills/<name>/SKILL.md` for new plugins. You still run them as `/hearth:shutdown`. If saving evening prompts is agreed, `hooks.json` also gets a `UserPromptSubmit` hook.
+> **Format note:** the current Claude Code docs call `commands/*.md` the older form and recommend `skills/<name>/SKILL.md` for new plugins. You still run them as `/hestia:shutdown`. If saving evening prompts is agreed, `hooks.json` also gets a `UserPromptSubmit` hook.
 
 ## Technical notes
 
 | Piece | Approach |
 |---|---|
 | Repo discovery | `cwd` of today's entries in `~/.claude/projects/*/*.jsonl` + current folder + `repos` in config |
-| Snapshot | `GIT_INDEX_FILE=tmp git add -A` → `write-tree` → `commit-tree -p HEAD` → `update-ref refs/hearth/<date>`; restore with `git checkout refs/hearth/<date> -- .` |
+| Snapshot | `GIT_INDEX_FILE=tmp git add -A` → `write-tree` → `commit-tree -p HEAD` → `update-ref refs/hestia/<date>`; restore with `git checkout refs/hestia/<date> -- .` |
 | Prompts | `type == "user"` entries with plain-text content; skip `tool_result` blocks and `<command…>` wrappers |
-| Pause | `~/.hearth/pause.json` `{until}`; the hook exits 0 immediately when there's no pause, so it adds no cost on normal days |
+| Pause | `~/.hestia/pause.json` `{until}`; the hook exits 0 immediately when there's no pause, so it adds no cost on normal days |
 | Paths | `${CLAUDE_PLUGIN_ROOT}`, so the user's `settings.json` is never edited |
 | Python | A launcher that tries `python3` then `python` (Windows only has `python`) |
-| Digest | Claude Code `CHANGELOG.md` from GitHub, compared against `claude --version` and `~/.hearth/digest.json`; offline means "couldn't check, nothing to do" |
-| Config | Optional `~/.hearth/config.json`: resume hour, working days, extra repos |
-| Overnight fact | Pause start from `~/.hearth/pause.json`, then the first `tool_use` timestamp after it in `~/.claude/projects/*/*.jsonl` |
+| Digest | Claude Code `CHANGELOG.md` from GitHub, compared against `claude --version` and `~/.hestia/digest.json`; offline means "couldn't check, nothing to do" |
+| Config | Optional `~/.hestia/config.json`: resume hour, working days, extra repos |
+| Overnight fact | Pause start from `~/.hestia/pause.json`, then the first `tool_use` timestamp after it in `~/.claude/projects/*/*.jsonl` |
 | Finish point | `shutdown` writes the list as a `- [ ]` checklist. `status` gives Claude the list plus today's commits and prompts, and Claude says which items look done. The count is Claude's judgement and is labelled as such |
 | While you were away | Per session, since your last prompt: tool calls, files changed, and whether the last assistant message asks you something ("waiting on you") |
-| Save evening prompts (proposed) | `UserPromptSubmit` hook: if paused and the prompt doesn't start with `/hearth:`, append it to tomorrow's list and return `decision: "block"` with a reason shown to you. Exits immediately when there's no pause |
+| Save evening prompts (proposed) | `UserPromptSubmit` hook: if paused and the prompt doesn't start with `/hestia:`, append it to tomorrow's list and return `decision: "block"` with a reason shown to you. Exits immediately when there's no pause |
 
 ## Making it easy for a reviewer (human or AI) to verify
 
@@ -132,7 +142,7 @@ These are plain facts, not persuasion. Each one maps to a judging line:
 
 - **README, first screen:** who it's for → the problem → which brief idea → install in two lines → what you'll see.
 - **Real sample output** in the README, captured from an actual run and labelled as such.
-- **`hearth.py selftest`**: builds a throwaway repo, runs shutdown → checks the snapshot → checks that the hook blocks → resumes. It proves the main flow end to end in one command.
+- **`hestia.py selftest`**: builds a throwaway repo, runs shutdown → checks the snapshot → checks that the hook blocks → resumes. It proves the main flow end to end in one command.
 - **Tests + CI badge** on three operating systems.
 - **"What it touches and how to undo it"** and **"What it deliberately doesn't do"** (no alerts, no streaks), which speak directly to the time-back criterion.
 - **Honest limitations** (e.g. digest needs network; the pause only blocks agents started through Claude Code).
@@ -141,7 +151,7 @@ These are plain facts, not persuasion. Each one maps to a judging line:
 ## Build order
 
 1. Plugin skeleton + marketplace, so it can be installed.
-2. `hearth.py` pause / resume / status + `PreToolUse` hook.
+2. `hestia.py` pause / resume / status + `PreToolUse` hook.
 3. Safe snapshot + tests.
 4. Log parsing → shutdown list (with the "what today was for" line), load numbers, morning recap.
 5. `plain`, then `digest`.
