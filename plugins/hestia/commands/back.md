@@ -6,7 +6,7 @@ allowed-tools: Bash, Read
 Lift the pause:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" back
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back
 ```
 
 - If it prints a `Start here:` line, give the user that one thing back in a

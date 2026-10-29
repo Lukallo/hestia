@@ -59,10 +59,11 @@ SHELL_TOOLS = ("Bash", "PowerShell")
 
 # A shell command matching this is always allowed while paused, otherwise the
 # pause would block the only command that lifts it. It has to be the whole
-# command: one hestia call, with an optional interpreter in front.
+# command: one hestia call, with an optional interpreter in front (python,
+# or sh for the launcher the commands use).
 RESUME_PATTERN = re.compile(
     r"""^
-    (?:(?:"[^"]*python[\w.]*"|(?:[^\s"']*[/\\])?python[\w.]*|py(?:\s+-3(?:\.\d+)?)?)\s+)?
+    (?:(?:"[^"]*(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)"|(?:[^\s"']*[/\\])?(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)|py(?:\s+-3(?:\.\d+)?)?)\s+)?
     (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
     \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b
     """,
@@ -2380,6 +2381,11 @@ def cmd_selftest(args):
             script, {"tool_name": "PowerShell", "tool_input": {"command": 'python "C:\\hestia\\hestia.py" back'}}, env
         )
         check("hook allows back from PowerShell", decision == "allow")
+
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back'}}, env
+        )
+        check("hook allows back through the launcher", decision == "allow")
 
         # Only the whole command gets through: nothing can ride along with it.
         decision = _hook_decision(

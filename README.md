@@ -29,7 +29,7 @@
 
 ## Get started
 
-Needs Claude Code, `git` and `python3`. Nothing else: the engine is standard library only.
+Needs Claude Code, `git` and Python 3 (as `python3` or `python`). Nothing else: the engine is standard library only. On Windows, install Git for Windows: Claude Code then runs the hooks in its Git Bash.
 
 **1. Install**, in Claude Code:
 
@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `40/40 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `41/41 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 40 checks, 80 tests
+## Prove it: 41 checks, 86 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -388,6 +388,7 @@ PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
 PASS hook allows back from PowerShell
+PASS hook allows back through the launcher
 PASS hook blocks work chained after back
 PASS hook blocks connector tools while paused
 PASS no handover while still paused
@@ -417,22 +418,24 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS init remove restores CLAUDE.md exactly
 
-40/40 checks passed
+41/41 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 80 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 86 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 80 tests in 10.517s
+Ran 86 tests in 12.157s
 
-OK
+OK (skipped=4)
 ```
+
+That run was on Linux. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
 
 ### Next to other plugins and connectors
 
@@ -491,7 +494,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 ## Honest limitations
 
 - Agent stopping only reaches Claude Code processes on **this machine**, found via `ps`.
-- On Windows the pause works, but nothing is signalled, and the hooks call `python3`.
+- On Windows the pause works, but nothing is signalled, and the hooks need Git for Windows.
 - `/hestia:new` needs the network. Offline it says it couldn't check, and does nothing else.
 - We can't claim burnout goes down. We can claim the day has an end, the agents stopped, and nothing ran between shutdown and morning.
 
@@ -511,7 +514,8 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
 - Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
 - We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
-- Developed on macOS and Linux. The selftest and unit tests also pass on Windows 11 with Python 3.13, but the plugin hasn't been run end to end inside Claude Code on Windows. The hooks invoke `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json` accordingly.
+- Developed on macOS and Linux. CI runs the selftest and unit tests on Windows from PowerShell, and the selftest again through the launcher in Git Bash. The plugin hasn't been run end to end inside Claude Code on Windows.
+- The hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher. It uses `python3`, or `python` when `python3` is missing or is the Microsoft Store placeholder. Claude Code runs hooks in Git Bash when Git for Windows is installed. Without it, Claude Code runs them in PowerShell, where the launcher can't start, so the pause isn't enforced. Hestia needs git anyway.
 
 </details>
 

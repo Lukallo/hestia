@@ -42,11 +42,13 @@ correctness bug.
 | Path | What it is |
 |---|---|
 | `plugins/hestia/scripts/hestia.py` | The whole engine and a standalone CLI. Standard library only. |
-| `plugins/hestia/commands/*.md` | The eight slash commands. Each one runs `hestia.py` first, then has Claude phrase the result. |
-| `plugins/hestia/hooks/hooks.json` | `PreToolUse` runs the pause. `SessionStart` (startup and resume) and `UserPromptSubmit` run the morning handover. |
+| `plugins/hestia/scripts/hestia` | The `sh` launcher the hooks and commands call. It runs `hestia.py` with `python3`, or with `python` when `python3` is missing or is the Windows Store placeholder. |
+| `plugins/hestia/commands/*.md` | The eight slash commands. Each one runs `hestia.py` through the launcher first, then has Claude phrase the result. |
+| `plugins/hestia/hooks/hooks.json` | `PreToolUse` runs the pause. `SessionStart` (startup and resume) and `UserPromptSubmit` run the morning handover. All of them go through the launcher. |
 | `plugins/hestia/.claude-plugin/plugin.json` | Plugin manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace manifest, so `/plugin marketplace add Lukallo/hestia` works. |
-| `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. |
+| `tests/test_hestia.py` | Unit tests. Real git repos in temp dirs, nothing mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests. |
+| `.github/workflows/test.yml` | CI: the selftest and unit tests on Linux, macOS and Windows (PowerShell), plus the selftest through the launcher in bash, which is Git Bash on Windows. |
 | `tests/compat/` | A live check that runs real `claude -p` sessions with Hestia, a stand-in connector (`fake_mcp.py`) and a stand-in plugin (`other/`). Not one of the three checks: it needs the `claude` CLI and costs a few cents. |
 | `README.md` | The public face, read by users and by an automated judge. Every output block in it is a real capture. |
 | `PLAN.md` | The design, the burnout research grounding, and the audit of what was cut and why. |
@@ -142,9 +144,11 @@ the test.
    through when it is one hestia call on its own: `SHELL_JOINERS` refuses
    chaining, pipes, redirects, subshells and new lines. `RESUME_PATTERN` in
    `hestia.py` allowlists `back`/`resume`, `today`/`status` and the read-only
-   `dashboard`, along with the hook commands. The hook tests cover several spellings, including the old
-   aliases. If you rename a command, update the pattern and those tests in
-   the same change.
+   `dashboard`, along with the hook commands. It applies to commands run
+   through the Bash tool and, on Windows, the PowerShell tool. The hook tests
+   cover several spellings, including the old aliases and the launcher. If
+   you rename a command, update the pattern and those tests in the same
+   change.
 3. **The handover happens exactly once per list, never while paused, and
    never to a scripted run.** The claim is an `O_EXCL` file, so a race between
    sessions has one winner; the selftest races eight and a test races twelve.
@@ -219,7 +223,12 @@ throwaway `HESTIA_HOME` for every scenario. Never run it in
 changes.
 
 The tests need `git` and Python 3.9 or newer. They create everything in temp
-dirs and set `HESTIA_HOME` and `HESTIA_LOG_DIR` for every test.
+dirs and set `HESTIA_HOME` and `HESTIA_LOG_DIR` for every test. They also need a
+git identity, because snapshots are real commits; CI sets one.
+
+CI runs the same checks, minus `claude plugin validate`, on Linux, macOS and
+Windows. On Windows they run from PowerShell, and the launcher step from Git
+Bash.
 
 ## 7. How to make common changes
 
@@ -240,7 +249,8 @@ Do all of these in the same change, or names drift:
 
 - an argparse subcommand in `main()` and a `cmd_<name>` function;
 - `plugins/hestia/commands/<name>.md`, with frontmatter `description`,
-  `argument-hint` if it takes arguments, and `allowed-tools: Bash`;
+  `argument-hint` if it takes arguments, and `allowed-tools: Bash`. It runs
+  `sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" <name>`, never `python3` directly;
 - a row in the README command table, with the icon `assets/BRAND.md`
   assigns to that stage;
 - the `PLAN.md` suite table, if it isn't there already;
@@ -257,6 +267,8 @@ does exactly this; add a row.
 - Exit immediately with no output when there is nothing to do.
 - Return the documented JSON shape for that event, under `hookSpecificOutput`.
 - Never block `/hestia:` commands.
+- Start it as `sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" <subcommand>`, so it
+  finds a working Python on Windows too.
 - Add a row to the README's table of things that happen on their own, and
   change the hook count in the heading above the command table.
 
@@ -325,7 +337,7 @@ These are known and documented. Don't half-fix them in an unrelated change.
 
 | Gap | State |
 |---|---|
-| Windows | The hooks call `python3`, which is usually `python` on Windows. Agent stopping uses `ps` and `SIGTERM`, which are POSIX only. The pause itself works |
+| Windows | With Git for Windows, the hooks run in Git Bash and the pause works. Without it, Claude Code runs hooks in PowerShell, where the `sh` launcher can't start, so the pause isn't enforced; Hestia needs git anyway. Agent stopping uses `ps` and `SIGTERM`, which are POSIX only, so nothing is signalled |
 | Plugin icon | Missing. The directory wants a square PNG, 512 to 2048 px. SVG is not accepted, so `assets/logo.svg` needs rendering |
 | Licence | Missing. The maintainers must choose one |
 | PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
@@ -342,4 +354,5 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | A scripted run got the list | The hook couldn't tell it was headless: its Claude Code passed neither `CLAUDE_CODE_SESSION_ATTENDED` nor `CLAUDE_CODE_ENTRYPOINT`, and its process flags had no `--print`. Set `HESTIA_SESSION_KIND=headless` in that job's environment |
 | `why` shows no commits for a repo with commits today | They were authored under a different identity from the one `git var GIT_AUTHOR_IDENT` reports there |
 | `new` always says nothing changed | `digest.json` already records the newest version. Delete it, or pass `--since` |
+| A hook error says "hestia: needs Python 3" | The launcher found no `python3` that runs and no `python`. Install Python 3, or put it on `PATH` |
 | The selftest fails only on `why` | The commit identity differs from the git identity. The selftest sets `GIT_AUTHOR_EMAIL`; check nothing in your environment overrides it |

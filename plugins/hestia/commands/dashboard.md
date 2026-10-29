@@ -4,7 +4,7 @@ allowed-tools: Bash
 ---
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" dashboard
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" dashboard
 ```
 
 Print the path it gives, and stop there. Do not summarise the page, do not

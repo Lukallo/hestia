@@ -47,6 +47,16 @@ json.dump(data, open(path, "w"))
 PY
 }
 
+handover_taken() {  # "yes" once Hestia has handed this list to a session
+  python3 - "$HESTIA_HOME/handover.json" <<'PY'
+import json, sys
+try:
+    print("yes" if json.load(open(sys.argv[1])).get("consumed") else "no")
+except (OSError, ValueError):
+    print("no")
+PY
+}
+
 ask() {
   REPLY_TEXT="$(cd "$S/work" && env -u CLAUDE_CODE_SESSION_ID $TIMEOUT ${TIMEOUT:+240} claude -p "$1" \
       --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
@@ -90,12 +100,13 @@ ask "/hestia:back"
 fresh; pause_now; night_passes
 MORNING="Without using any tools, answer in two lines: 1) the codeword OTHER_PLUGIN gave you, 2) the note at the top of yesterday's Hestia list, or 'none'."
 ask "$MORNING"  # `claude -p` is a scripted run, so the handover waits for a person
-case "$REPLY_TEXT" in *"compat test day"*) ok=1 ;; *) ok=0 ;; esac
-check "morning: a scripted run doesn't take the handover" $ok
+[ "$(handover_taken)" = "no" ]; check "morning: a scripted run doesn't take the handover" $?
 export HESTIA_SESSION_KIND=interactive  # stands in for a person opening Claude Code
 ask "$MORNING"
 unset HESTIA_SESSION_KIND
-case "$REPLY_TEXT" in *BLUEBERRY*"compat test day"*) ok=0 ;; *) ok=1 ;; esac
+# Hestia's own record says whether the handover was given. Claude is told not to
+# recite the list, so only the other plugin's codeword is checked in the reply.
+case "$(handover_taken) $REPLY_TEXT" in "yes "*BLUEBERRY*) ok=0 ;; *) ok=1 ;; esac
 check "morning: a person gets Hestia's handover and the other plugin's context" $ok
 
 echo

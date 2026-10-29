@@ -1,0 +1,26 @@
+#!/bin/sh
+# Runs hestia.py with python3, or with python where python3 doesn't work.
+#
+# Windows usually has `python` and no working `python3`. The python3 on its
+# PATH can be a placeholder that only points to the Microsoft Store. Those
+# placeholders live in a WindowsApps folder, so a python3 from there has to
+# run once before it counts. Anywhere else python3 starts straight away, so
+# the hooks start no extra Python on a normal day.
+
+case "$0" in
+    */*) script="${0%/*}/hestia.py" ;;
+    *) script="hestia.py" ;;
+esac
+
+python3="$(command -v python3 2>/dev/null)"
+case "$python3" in
+    "") ;;
+    *[Ww]indows[Aa]pps*)
+        "$python3" -c "" </dev/null >/dev/null 2>&1 && exec "$python3" "$script" "$@" ;;
+    *) exec "$python3" "$script" "$@" ;;
+esac
+
+command -v python >/dev/null 2>&1 && exec python "$script" "$@"
+
+echo "hestia: needs Python 3, as python3 or python" >&2
+exit 1

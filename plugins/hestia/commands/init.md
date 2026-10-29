@@ -10,7 +10,7 @@ to nag. Find out everything the machine already knows, then ask only the rest.
 If `$ARGUMENTS` is `remove`, run this, print what it says, and stop:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" init remove
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init remove
 ```
 
 ## 1. Look before asking
@@ -20,7 +20,7 @@ List the MCP servers you can see in your own tools: every tool named
 them, comma separated, as `<servers>` (empty if there are none). Then run:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" init detect --json --seen "<servers>"
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init detect --json --seen "<servers>"
 ```
 
 It returns their git name, GitHub login, usual hours from recent sessions, the
@@ -65,7 +65,7 @@ The ones they pick are `allowed`. The ones they leave unpicked are `declined`.
 Build the answers as JSON and pass it on stdin. Leave out any field the user skipped:
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" init write --seen "<servers>" --answers - <<'JSON'
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init write --seen "<servers>" --answers - <<'JSON'
 {"why": "...", "helps": "...", "tone": "plain|warm|detail",
  "resume_hour": 8, "working_days": [0, 1, 2, 3, 4],
  "connectors": {"<connector key>": "allowed|declined"}}
