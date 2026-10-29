@@ -2389,29 +2389,36 @@ def _days_label(days):
     return ", ".join(DAY_NAMES[d] for d in days)
 
 
+# The section loads into every session, so it has a hard budget. Every line
+# must change how Claude behaves; see AGENTS.md, "The CLAUDE.md section".
+SECTION_MAX_CHARS = 800
+SECTION_ANSWER_CHARS = 100
+
+
 def render_claude_section(profile, cfg, connectors):
     """The block that lives in ~/.claude/CLAUDE.md. Short: it loads every session."""
-    lines = [SECTION_START, "## Hestia: about me", ""]
-    if profile.get("name"):
-        lines.append("- Name: %s." % profile["name"])
+    lines = [SECTION_START, "## Hestia: about me"]
+    if profile.get("name_given") and profile.get("name"):
+        lines.append("- Call me %s." % _one_line(profile["name"], 40).rstrip("."))
     if profile.get("why"):
-        lines.append("- I build because: %s." % profile["why"].rstrip("."))
+        lines.append("- I build because: %s." % _one_line(profile["why"], SECTION_ANSWER_CHARS).rstrip("."))
     if profile.get("helps"):
-        lines.append("- Right now my work helps: %s." % profile["helps"].rstrip("."))
+        lines.append("- My work helps: %s." % _one_line(profile["helps"], SECTION_ANSWER_CHARS).rstrip("."))
     lines.append(
-        "- When you explain a change, say what it does for people first, then how. %s"
+        "- Explain a change by what it does for people first, then how. %s"
         % TONES.get(profile.get("tone"), TONES["plain"])
     )
     lines.append(
-        "- My working days are %s. Hestia pauses agents overnight and resumes at %02d:00; "
-        "after I run /hestia:done, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
+        "- I work %s; Hestia resumes agents at %02d:00. After /hestia:done or during "
+        "/hestia:break, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
     )
     allowed = sorted(c["name"] for c in connectors.values() if c.get("consent") == "allowed")
     lines.append(
         "- Connectors Hestia may use: %s. Don't suggest installing others."
         % (", ".join(allowed) if allowed else "none")
     )
-    lines += ["", "<!-- Written by /hestia:init. Re-run it to change this; remove with: hestia.py init remove -->", SECTION_END]
+    lines += ["<!-- Written by /hestia:init. Re-run it to change this; /hestia:init remove takes it out. -->",
+              SECTION_END]
     return "\n".join(lines)
 
 
@@ -2509,6 +2516,8 @@ def init_write(answers, cwd, seen=(), now=None):
 
     profile = dict(detected["profile"] or {})
     profile.update({k: answers[k] for k in ("name", "why", "helps", "tone", "dream") if k in answers})
+    if "name" in answers:
+        profile["name_given"] = True  # typed by the person, so it goes in CLAUDE.md
     profile.setdefault("name", detected["name"])
     profile.setdefault("tone", "plain")
     profile.setdefault("dream", True)
@@ -3220,6 +3229,8 @@ def cmd_selftest(args):
         check("no dashboard on a computer with no screen",
               proc.returncode == 0 and "/hestia:today" in proc.stdout.decode()
               and not (home / "dashboard.html").exists())
+        section = text[text.find(SECTION_START.encode()):]
+        check("CLAUDE.md section stays inside its budget", 0 < len(section.decode("utf-8")) <= SECTION_MAX_CHARS)
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 

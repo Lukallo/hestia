@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `50/50 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `51/51 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 50 checks, 136 tests
+## Prove it: 51 checks, 140 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -422,29 +422,30 @@ PASS new degrades cleanly offline
 PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS no dashboard on a computer with no screen
+PASS CLAUDE.md section stays inside its budget
 PASS init remove restores CLAUDE.md exactly
 PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-50/50 checks passed
+51/51 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 136 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 140 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 136 tests in 25.263s
+Ran 140 tests in 56.342s
 
-OK
+OK (skipped=7)
 ```
 
-That run was on macOS. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
+That run was on Windows, where 7 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, 2 use a shell-script stand-in browser, and 1 needs `time.tzset`, which is POSIX only. CI runs them on Linux and macOS.
 
 `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: notes, prompts and paths in any language, folders with spaces, the restore line pasted into each shell on the machine, and every hook run the way Claude Code runs it. Where it can, it also recreates Windows' text encodings, so a regression shows up on any machine.
 
@@ -590,3 +591,4 @@ If you start Claude Code with `CLAUDE_CONFIG_DIR`, for example to keep a work an
 - [PLAN.md](PLAN.md): the full design, the burnout grounding, and the audit of what was cut and why.
 - [assets/BRAND.md](assets/BRAND.md): the visual identity, palette and icon rules.
 - [REFERENCE.md](REFERENCE.md): projects we learned from, and what we took from each.
+- [LICENSE](LICENSE): MIT. Use it, change it and share it; keep the copyright notice.

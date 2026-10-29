@@ -1366,7 +1366,7 @@ class TestInitWrite(TempHome):
         text = (self.tmp / "claude" / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertIn("the food bank volunteers", text)
         self.assertIn("Mon-Thu", text)
-        self.assertIn("resumes at 09:00", text)
+        self.assertIn("resumes agents at 09:00", text)
         self.assertIn("Connectors Hestia may use: Google Calendar.", text)
 
     def test_bad_answers_fall_back_to_defaults(self):
@@ -1658,6 +1658,38 @@ class TestDream(TempHome):
 
     def test_no_memory_means_nothing_to_tidy(self):
         self.assertEqual(hestia.dream_plan()["skipped"], "no memory to tidy")
+
+
+class TestClaudeMdBudget(TempHome):
+    """The section loads into every session, so it stays small and only says what changes behaviour."""
+
+    def section(self, answers, seen=()):
+        hestia.init_write(answers, str(self.tmp), list(seen))
+        text = (self.tmp / "claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        return text[text.index(hestia.SECTION_START):]
+
+    def test_stays_inside_the_budget_at_maximum_length(self):
+        long = "x" * 500
+        servers = ["claude_ai_Google_Calendar", "claude_ai_Slack", "claude_ai_Linear", "claude_ai_Gmail"]
+        text = self.section({
+            "name": long, "why": long, "helps": long, "tone": "detail",
+            "working_days": [0, 2, 4, 6], "resume_hour": 23,
+            "connectors": {hestia.connector_key(s): "allowed" for s in servers},
+        }, servers)
+        self.assertLessEqual(len(text), hestia.SECTION_MAX_CHARS, text)
+        self.assertLessEqual(len([l for l in text.splitlines() if l.startswith("- ")]), 8)
+
+    def test_a_git_username_is_not_a_name(self):
+        self.assertNotIn("Call me", self.section({}))
+        self.assertIn("- Call me Ada.", self.section({"name": "Ada"}))
+
+    def test_breaks_count_as_time_off_too(self):
+        self.assertIn("/hestia:break, don't suggest more work", self.section({}))
+
+    def test_the_footer_names_the_real_command(self):
+        text = self.section({})
+        self.assertIn("/hestia:init remove", text)
+        self.assertNotIn("hestia.py", text)
 
 
 class TestEverythingUsesTheLauncher(unittest.TestCase):

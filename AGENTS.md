@@ -220,10 +220,10 @@ python3 -m unittest discover -s tests               # prints Ran N tests ... OK
 claude plugin validate .                            # Validation passed
 ```
 
-`claude plugin validate plugins/hestia` additionally runs the plugin
-directory's submission checks. It currently reports a missing licence and a
-missing icon. Both are known, and choosing a licence is the maintainers'
-decision, not an agent's.
+`claude plugin validate plugins/hestia --profile directory` additionally
+runs the plugin directory's submission checks. They pass: the licence is MIT
+(`LICENSE` at the repo root, `license` in `plugin.json`) and the icon is
+`plugins/hestia/.claude-plugin/icon.png`.
 
 When you change the hooks or the pause, also run `tests/compat/run.sh`. It
 checks that the pause holds next to a connector and another plugin, using a
@@ -251,6 +251,30 @@ Bash.
    changed.
 5. **Re-capture** every README block the change affects (see section 8).
 6. Update the check and test counts in the README heading and body.
+
+### Change the CLAUDE.md section
+
+`/hestia:init` writes a short "Hestia: about me" section into the user's
+`~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->`.
+It loads into **every** session in every project, so each line costs tokens
+forever. `render_claude_section()` in `hestia.py` is the only thing that writes
+it. Keep it efficient:
+
+- **Budget:** at most 8 bullets and `SECTION_MAX_CHARS` (800 characters),
+  markers included. `TestClaudeMdBudget` fills every answer at maximum length
+  and fails past that. Free-text answers are clipped to `SECTION_ANSWER_CHARS`.
+- **Every line must change how Claude behaves.** "Explain by what it does for
+  people first" earns its place. A fact Claude never acts on doesn't.
+- **Only what Claude can't learn elsewhere.** No git username, no paths, no
+  repo facts. A name goes in only if the person typed it (`name_given`).
+- **No command manuals.** Each command's `.md` describes itself. Name a command
+  only to tell Claude how to behave around it, for example "after
+  /hestia:done or during /hestia:break, don't suggest more work".
+- **Plain, imperative, one idea per bullet,** in the person's voice ("I work
+  Mon-Fri"), because it sits among their own notes.
+- **Never edit it from anywhere else.** If a new command changes how Claude
+  should behave, change the renderer, add a test, and the next `init` rewrites
+  the section. Outside the markers stays byte-identical (see the invariants).
 
 ### Ship it to people who already installed
 
@@ -360,8 +384,6 @@ These are known and documented. Don't half-fix them in an unrelated change.
 | Gap | State |
 |---|---|
 | Windows | With Git for Windows, the hooks run in Git Bash and the pause works. Without it, Claude Code runs hooks in PowerShell, where the `sh` launcher can't start, so the pause isn't enforced; Hestia needs git anyway. Agent stopping uses `ps` and `SIGTERM`, which are POSIX only, so nothing is signalled |
-| Plugin icon | Missing. The directory wants a square PNG, 512 to 2048 px. SVG is not accepted, so `assets/logo.svg` needs rendering |
-| Licence | Missing. The maintainers must choose one |
 | PLAN pieces not built | The lunch break, a recap after a midday break, the finish line, catch-up and park. Each needs a new always-on hook; see the README's Scope section |
 | Remote agents | Only processes on this machine can be stopped |
 | Mods | A mod can approve a tool call the pause blocked, unless managed settings or a Team or Enterprise login is in place. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow. Documented in the README's limitations |
