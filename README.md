@@ -102,6 +102,7 @@ It never edits your `settings.json`, never commits to your branch, and never pus
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
+## Prove it: 51 checks, 141 tests
 ## What it never does
 
 - No notifications, reminders or nudges: every command runs because you typed it.
@@ -170,7 +171,21 @@ PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-47/47 checks passed
+51/51 checks passed
+```
+
+The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
+
+The 141 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+
+```text
+python3 -m unittest discover -s tests -v
+```
+
+```text
+Ran 141 tests in 26.753s
+
+OK (skipped=7)
 ```
 
 The unittest result (the commands under test print their own output in between, left out here):
@@ -183,7 +198,63 @@ OK (skipped=6)
 
 That run was on Windows, where 6 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, and 2 dashboard tests use a shell-script stand-in browser. CI runs them on Linux and macOS. `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: non-English text, folders with spaces, and hooks run the way Claude Code runs them.
 
-The selftest never touches real processes and reads a local changelog, so it runs offline. The tests use real git repos in temp folders; nothing is mocked.
+## What it deliberately doesn't do
+
+The brief's one rule is that it has to give time back, not help you do more. So:
+
+- **No notifications, reminders or nudges.** Nothing ever interrupts you. Every command runs because you typed it.
+- **No live dashboard.** The workload numbers live inside `/hestia:today`, and `/hestia:dashboard` writes the same facts to a static page, both only when asked. Nothing refreshes, nothing sits open in a tab, and there are no totals or comparisons. A thing you have to check is a thing that costs attention.
+- **No streaks, scores or goals.** Measuring rest turns rest into work.
+- **No summary at shutdown.** `/hestia:done` answers in three lines and stops. A command that ends the day shouldn't give you more to read.
+- **No break suggestions.** `/hestia:break` says when it ends and what it saved. What you do on it is yours.
+- **No release digest.** `/hestia:new` shows one change, not the woodpile, and says nothing at all when nothing changed.
+
+The time it saves is the stashing, the "where was I?" note, the morning re-orientation, and the agents that would otherwise have run all night.
+
+## Scope
+
+All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later: `/hestia:init` and `/hestia:dashboard`. So is the morning recap on your first prompt. The other automatic pieces it describes are not: the opt-in lunch break, a recap after a midday break, the finish line ("3 of 5 done"), catch-up on what agents did while you were away, and parking prompts typed while paused. Each one would add a hook that runs on every prompt or turn, so they wait until the commands have been used for real.
+
+## If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| Every tool call is denied with "Clocked out until..." | You ran `/hestia:done`. Run `/hestia:back`, or delete `~/.hestia/pause.json` |
+| Denied with "On a break until..." | A break. It lifts itself at that time, or `/hestia:back` ends it now |
+| The morning list didn't appear | The session was resumed with `--continue`, the pause hadn't ended yet, or the list was already handed over. Delete `~/.hestia/handover.json` to get it again |
+| `/hestia:why` shows no commits for a repo you committed to today | The commits were made under a different git identity from the one that repo uses now |
+| `/hestia:new` always says nothing changed | `~/.hestia/digest.json` already has the newest version. Delete it to see the changes again |
+| `/hestia:dashboard` says there's no dashboard on this computer | You told `/hestia:init` it has no screen. Run `/hestia:init` again and pick "It has a screen" |
+| Commands fail with `python3: command not found` | Install Python 3. On Windows the command is usually `python`, see the limitations below |
+
+## Honest limitations
+
+- Agent stopping only reaches Claude Code processes on **this machine**, found via `ps`.
+- On Windows the pause works, but nothing is signalled, and the hooks need Git for Windows.
+- `/hestia:new` needs the network. Offline it says it couldn't check, and does nothing else.
+- We can't claim burnout goes down. We can claim the day has an end, the agents stopped, and nothing ran between shutdown and morning.
+
+<details>
+<summary><b>Limitations in detail</b></summary>
+
+- Agent stopping finds Claude Code processes on **this machine**, via `ps`. A run on a CI box, a remote host or inside a container keeps going; so does anything not launched as `claude`.
+- Process detection is POSIX (`ps`, `SIGTERM`). On Windows the pause still works (the hook blocks the next step), but nothing is signalled.
+- The handover tells a scripted run from a person using what Claude Code passes to hooks (`CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`). On versions that pass neither, it checks the launching process's flags. If it still can't tell, it assumes a person is there, because a list handed to a script is lost.
+- The overnight line is read from Claude Code's session logs. Work done outside Claude Code isn't in it.
+- `Sessions to pick up` lists sessions you typed in today, newest first, with a `claude --resume` line for each. Sessions with no prompts today aren't listed.
+- While paused, Claude won't act on anything, including for you. That's deliberate, but it means `/hestia:back` is the only way back in tonight. The hook allowlists that command explicitly so you can never lock yourself out, but only as a command on its own.
+- A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
+- The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
+- A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
+- Untracked files over `snapshot_max_mb` (50 MB by default) are not saved. `TOMORROW.md` names them under the repo, but the snapshot can't restore them. The limit is per file, so many small new files can still add up.
+- If `~/.hestia/pause.json` can't be read, or its end time can't be parsed, Hestia treats it as no pause and blocks nothing. That's deliberate: a broken file must never lock you out until morning.
+- A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
+- `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
+- `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
+- Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
+- We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
+- Developed on macOS and Linux. CI runs the selftest and unit tests on Windows from PowerShell, and the selftest again through the launcher in Git Bash. The plugin hasn't been run end to end inside Claude Code on Windows.
+- The hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher. It uses `python3`, or `python` when `python3` is missing or is the Microsoft Store placeholder. Claude Code runs hooks in Git Bash when Git for Windows is installed. Without it, Claude Code runs them in PowerShell, where the launcher can't start, so the pause isn't enforced. Hestia needs git anyway.
 
 </details>
 

@@ -77,7 +77,7 @@ RESUME_PATTERN = re.compile(
     r"""^
     (?:(?:"[^"]*(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)"|(?:[^\s"']*[/\\])?(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)|py(?:\s+-3(?:\.\d+)?)?)\s+)?
     (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
-    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest|dream\s+restore)\b
+    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|dream\s+restore)\b
     """,
     re.X | re.I,
 )
