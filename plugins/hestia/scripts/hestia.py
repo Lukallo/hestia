@@ -9,21 +9,28 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py today [--json]                                (alias: status)
     hestia.py why   [--days N] [--repo PATH] [--json]       facts for "what was this for"
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
+    hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
+    hestia.py connector NAME [--present] [--set allowed|declined]
+    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
-    HESTIA_HOME      state directory, default ~/.hestia
-    HESTIA_LOG_DIR   Claude Code project logs, default ~/.claude/projects
+    HESTIA_HOME           state directory, default ~/.hestia
+    HESTIA_LOG_DIR        Claude Code project logs, default ~/.claude/projects
+    HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
+    HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
 """
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -46,7 +53,7 @@ NEW_MAX_CHANGES = 150
 # Bash commands matching this are always allowed while paused, otherwise the
 # pause would block the only command that lifts it.
 RESUME_PATTERN = re.compile(
-    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|hook|session-start|selftest)\b"
+    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|dashboard|hook|session-start|selftest)\b"
 )
 
 
@@ -357,11 +364,14 @@ HEADLESS_MARKERS = ("--print", "--output-format", "-p ")
 
 
 def _ps_table():
-    proc = subprocess.run(
-        ["ps", "-eo", "pid=,ppid=,command="],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return []  # no `ps` (Windows): no agents found, so none are signalled
     rows = []
     for line in proc.stdout.decode("utf-8", "replace").splitlines():
         parts = line.strip().split(None, 2)
@@ -901,6 +911,267 @@ def cmd_status(args):
     return 0
 
 
+# --------------------------------------------------------------------------
+# dashboard: the same reading as `today`, as one static page
+# --------------------------------------------------------------------------
+
+# A page you open, read and close. It never refreshes, never alerts, and shows
+# no totals, scores or comparisons: only today's facts, and only when asked.
+
+DASHBOARD_CSS = """
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #1C1714; color: #A89E97;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 960px; margin: 0 auto; padding: 40px 24px 56px; }
+h1, h2 { font-family: Georgia, "Times New Roman", serif; color: #F6EDE3; font-weight: normal; }
+h1 { font-size: 30px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 0 0 14px; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+code { color: #F4B740; }
+.lede { margin: 0 0 28px; }
+.tile { background: #2A211C; border: 1px solid #3A2E27; border-radius: 14px; padding: 20px 22px; margin-bottom: 18px; }
+.status { font-family: Georgia, serif; font-size: 22px; color: #F6EDE3; margin: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px; margin: 0; }
+.facts dt { font-size: 13px; }
+.facts dd { margin: 2px 0 0; font-size: 22px; color: #F6EDE3; font-variant-numeric: tabular-nums; }
+.facts dd small { font-size: 13px; color: #A89E97; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+.grid .tile { margin: 0; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain li { padding: 7px 0; border-top: 1px solid #3A2E27; display: flex; justify-content: space-between; gap: 12px; }
+ul.plain li:first-child { border-top: 0; }
+ul.plain .n { color: #F6EDE3; font-variant-numeric: tabular-nums; }
+.snap { display: block; margin-top: 2px; word-break: break-all; }
+pre { white-space: pre-wrap; margin: 0; color: #A89E97; }
+.empty { margin: 0; }
+svg text { fill: #A89E97; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.tick { stroke: #E8743B; stroke-width: 2; stroke-linecap: round; }
+.hit:hover + .tick, .hit:focus + .tick { stroke: #F4B740; stroke-width: 3; }
+.hit { fill: transparent; cursor: default; outline: none; }
+.axis { stroke: #3A2E27; stroke-width: 1; }
+.gap { stroke: #6B615B; stroke-width: 1; }
+details { margin-top: 14px; }
+summary { cursor: pointer; font-size: 13px; }
+table { border-collapse: collapse; margin-top: 10px; font-size: 13px; width: 100%; }
+th, td { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid #3A2E27; }
+th { color: #F6EDE3; font-weight: normal; }
+footer { margin-top: 28px; font-size: 13px; color: #6B615B; }
+"""
+
+
+def _esc(value):
+    return html.escape(str(value), quote=True)
+
+
+def list_snapshots(repos, limit=5):
+    """The most recent refs/hestia snapshots in each repo, newest first."""
+    found = []
+    for repo in repos:
+        result = git(
+            repo,
+            ["for-each-ref", "refs/hestia", "--sort=-creatordate", "--count=%d" % limit,
+             "--format=%(refname)%09%(creatordate:iso-strict)"],
+        )
+        if not result.ok:
+            continue
+        for line in result.out.splitlines():
+            ref, _, when = line.partition("\t")
+            if ref:
+                found.append({"repo": str(repo), "ref": ref, "at": parse_ts(when)})
+    found.sort(key=lambda s: s["at"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return found
+
+
+def _timeline_svg(prompts, now, paused):
+    """Every prompt today as a tick on the hours it happened in.
+
+    Gaps of BREAK_MINUTES or more are marked, because those are the breaks.
+    One series, so no legend: the heading names it.
+    """
+    width, height = 960, 104
+    left, right, base = 16, 944, 74
+    start = prompts[0]["at"].replace(minute=0, second=0, microsecond=0)
+    end_at = prompts[-1]["at"] if paused else max(prompts[-1]["at"], now)
+    end = end_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    span = (end - start).total_seconds() or 1.0
+
+    def x(when):
+        return left + (right - left) * (when - start).total_seconds() / span
+
+    parts = [
+        '<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-labelledby="tl-title">' % (width, height),
+        '<title id="tl-title">Prompts today, from %s to %s</title>'
+        % (prompts[0]["at"].strftime("%H:%M"), prompts[-1]["at"].strftime("%H:%M")),
+        '<line class="axis" x1="%d" y1="%d" x2="%d" y2="%d"/>' % (left, base, right, base),
+    ]
+
+    hours = int(span // 3600)
+    step = 1 if hours <= 12 else 2
+    for i in range(0, hours + 1, step):
+        when = start + timedelta(hours=i)
+        parts.append(
+            '<text x="%.1f" y="%d" text-anchor="middle">%s</text>'
+            % (min(max(x(when), left + 14), right - 14), base + 22, when.strftime("%H:%M"))
+        )
+
+    for earlier, later in zip(prompts, prompts[1:]):
+        minutes = int((later["at"] - earlier["at"]).total_seconds() / 60)
+        if minutes < BREAK_MINUTES:
+            continue
+        x1, x2 = x(earlier["at"]) + 4, x(later["at"]) - 4
+        if x2 - x1 < 8:
+            continue
+        parts.append(
+            '<path class="gap" d="M%.1f 18v5H%.1fv-5" fill="none"/>' % (x1, x2)
+        )
+        if x2 - x1 >= 48:
+            parts.append(
+                '<text x="%.1f" y="13" text-anchor="middle">%d min</text>'
+                % ((x1 + x2) / 2, minutes)
+            )
+
+    for prompt in prompts:
+        px = x(prompt["at"])
+        label = "%s · %s" % (prompt["at"].strftime("%H:%M"), Path(prompt["cwd"]).name or "no project")
+        parts.append(
+            '<rect class="hit" x="%.1f" y="26" width="10" height="%d" tabindex="0">'
+            '<title>%s</title></rect>' % (px - 5, base - 26, _esc(label))
+        )
+        parts.append('<line class="tick" x1="%.1f" y1="34" x2="%.1f" y2="%d"/>' % (px, px, base - 2))
+
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
+    """One self-contained HTML page. No scripts, no network, nothing that refreshes."""
+    if pause:
+        status = _esc(pause_line(pause))
+        if pause.get("note"):
+            status += " <small>%s</small>" % _esc(pause["note"])
+    else:
+        status = "Working."
+
+    if load["prompts"]:
+        if load["last_break_at"]:
+            last_break = "%d min <small>at %s</small>" % (
+                load["last_break_minutes"], load["last_break_at"].strftime("%H:%M"))
+        else:
+            last_break = "none <small>longer than %d min</small>" % BREAK_MINUTES
+        facts = (
+            '<dl class="facts">'
+            "<div><dt>Prompts</dt><dd>%d</dd></div>"
+            "<div><dt>Projects</dt><dd>%d</dd></div>"
+            "<div><dt>First to last</dt><dd>%s <small>hours, %s–%s</small></dd></div>"
+            "<div><dt>Last real break</dt><dd>%s</dd></div>"
+            "</dl>"
+        ) % (
+            load["prompts"], len(load["projects"]), load["span_hours"],
+            load["first"].strftime("%H:%M"), load["last"].strftime("%H:%M"), last_break,
+        )
+        rows = "".join(
+            "<tr><td>%s</td><td>%s</td></tr>"
+            % (p["at"].strftime("%H:%M"), _esc(Path(p["cwd"]).name or "no project"))
+            for p in prompts
+        )
+        timeline = (
+            '<section class="tile"><h2>When you were working</h2>%s'
+            "<details><summary>As a table</summary>"
+            "<table><thead><tr><th>Time</th><th>Project</th></tr></thead><tbody>%s</tbody></table>"
+            "</details></section>"
+        ) % (_timeline_svg(prompts, now, bool(pause)), rows)
+
+        counts = {}
+        for p in prompts:
+            if p["cwd"]:
+                counts[p["cwd"]] = counts.get(p["cwd"], 0) + 1
+        projects = "".join(
+            '<li><span title="%s">%s</span><span class="n">%d</span></li>'
+            % (_esc(cwd), _esc(Path(cwd).name), n)
+            for cwd, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ) or "<li>none recorded</li>"
+    else:
+        facts = '<p class="empty">No prompts recorded today.</p>'
+        timeline = ""
+        projects = "<li>none recorded</li>"
+
+    if snapshots:
+        snaps = "".join(
+            "<li><div>%s <small>%s</small>"
+            '<code class="snap">git -C %s checkout %s -- .</code></div></li>'
+            % (
+                _esc(Path(s["repo"]).name),
+                _esc(human(s["at"]) if s["at"] else ""),
+                _esc(s["repo"]), _esc(s["ref"]),
+            )
+            for s in snapshots
+        )
+    else:
+        snaps = "<li>no snapshots yet</li>"
+
+    tomorrow = (
+        "<pre>%s</pre>" % _esc(tomorrow_text.strip())
+        if tomorrow_text and tomorrow_text.strip()
+        else '<p class="empty">No list yet. <code>/hestia:done</code> writes one.</p>'
+    )
+
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hestia · %(date)s</title>
+<style>%(css)s</style></head>
+<body><main>
+<h1>Hestia</h1>
+<p class="lede">%(date)s. The same reading as <code>/hestia:today</code>, on one page.</p>
+<section class="tile"><p class="status">%(status)s</p></section>
+<section class="tile"><h2>Today</h2>%(facts)s</section>
+%(timeline)s
+<div class="grid">
+<section class="tile"><h2>Projects</h2><ul class="plain">%(projects)s</ul></section>
+<section class="tile"><h2>Saved work</h2><ul class="plain">%(snaps)s</ul></section>
+</div>
+<section class="tile" style="margin-top:18px"><h2>Tomorrow's list</h2>%(tomorrow)s</section>
+<footer>Read at %(time)s. This page doesn't refresh: run <code>hestia.py dashboard</code> again for a new reading.</footer>
+</main></body></html>
+""" % {
+        "css": DASHBOARD_CSS,
+        "date": now.strftime("%A %d %B"),
+        "time": now.strftime("%H:%M"),
+        "status": status,
+        "facts": facts,
+        "timeline": timeline,
+        "projects": projects,
+        "snaps": snaps,
+        "tomorrow": tomorrow,
+    }
+
+
+def cmd_dashboard(args):
+    now = datetime.now().astimezone()
+    cfg = load_config()
+    pause = read_pause(now)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    prompts = read_prompts(start_of_day)
+    load = day_load(prompts)
+    snapshots = list_snapshots(discover_repos(prompts, cfg))
+
+    tomorrow_path = hestia_home() / "TOMORROW.md"
+    tomorrow_text = tomorrow_path.read_text() if tomorrow_path.exists() else ""
+
+    out = Path(args.out) if args.out else hestia_home() / "dashboard.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text), encoding="utf-8")
+    print("Dashboard: %s" % out)
+
+    if not args.no_open:
+        import webbrowser
+
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
 def cmd_hook(args):
     """PreToolUse hook. Silent and immediate when there is no pause."""
     raw = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -1228,6 +1499,449 @@ def cmd_new(args):
     return 0
 
 
+# init: get to know the user, once
+# --------------------------------------------------------------------------
+
+SECTION_START = "<!-- hestia:start -->"
+SECTION_END = "<!-- hestia:end -->"
+
+# First match wins. Covers the connectors in connectors/README.md; anything
+# else is recorded as "other" rather than guessed. Microsoft 365 counts as a
+# calendar because that's the part Hestia would read.
+CONNECTOR_KINDS = [
+    ("calendar", ("calendar", "gcal", "reclaim", "calendly", "cal.com", "microsoft 365", "microsoft_365", "m365")),
+    ("email", ("gmail", "outlook", "mail")),
+    ("chat", ("slack", "discord", "imessage", "teams", "telegram", "whatsapp")),
+    ("tasks", ("linear", "jira", "atlassian", "asana", "monday", "clickup", "todoist", "ticktick", "trello")),
+    ("code", ("github", "gitlab", "bitbucket")),
+    ("docs", ("notion", "drive", "docs", "sheets", "slides", "confluence", "dropbox")),
+]
+
+TONES = {
+    "plain": "Keep it short and plain.",
+    "warm": "Be warm and encouraging, but brief.",
+    "detail": "Detail is welcome when I ask how something works.",
+}
+
+CONSENTS = ("allowed", "declined", "unasked")
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def claude_dir():
+    return Path(os.environ.get("HESTIA_CLAUDE_DIR") or (Path.home() / ".claude"))
+
+
+def claude_json_path():
+    return Path(os.environ.get("HESTIA_CLAUDE_JSON") or (Path.home() / ".claude.json"))
+
+
+def claude_md_path():
+    return claude_dir() / "CLAUDE.md"
+
+
+def connectors_path():
+    return hestia_home() / "connectors.json"
+
+
+def profile_path():
+    return hestia_home() / "profile.json"
+
+
+def connector_key(server):
+    """'claude_ai_Google_Calendar' -> 'google-calendar'."""
+    name = re.sub(r"^(claude[_ .]ai[_ ]|plugin:[^:]*:)", "", server.strip(), flags=re.I)
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "unnamed"
+
+
+def display_name(server):
+    """'claude_ai_Google_Calendar' -> 'Google Calendar', for people to read."""
+    name = re.sub(r"^(claude[_ .]ai[_ ]|plugin:[^:]*:)", "", server.strip(), flags=re.I)
+    return name.replace("_", " ").strip() or server
+
+
+def classify_connector(server):
+    lowered = server.lower()
+    for kind, words in CONNECTOR_KINDS:
+        if any(word in lowered for word in words):
+            return kind
+    return "other"
+
+
+def tool_prefix(server):
+    """Claude Code names MCP tools mcp__<server>__<tool>."""
+    return "mcp__%s__" % re.sub(r"[^A-Za-z0-9_-]", "_", server)
+
+
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def detect_connectors(cwd, seen=()):
+    """MCP servers this user has, keyed by a stable slug.
+
+    Configured servers come from Claude Code's own files. claude.ai connectors
+    aren't in any file, so the command passes the servers Claude can see.
+    """
+    found = {}
+
+    def add(server, source):
+        key = connector_key(server)
+        if key in found:
+            return
+        found[key] = {
+            "server": server,
+            "name": display_name(server),
+            "kind": classify_connector(server),
+            "source": source,
+            "status": "available",
+            "tool_prefix": tool_prefix(server),
+        }
+
+    config = read_json(claude_json_path()) or {}
+    for server in (config.get("mcpServers") or {}):
+        add(server, "user")
+    for path, project in (config.get("projects") or {}).items():
+        if isinstance(project, dict) and _same_path(path, cwd):
+            for server in (project.get("mcpServers") or {}):
+                add(server, "local")
+    for server in ((read_json(Path(cwd) / ".mcp.json") or {}).get("mcpServers") or {}):
+        add(server, "project")
+    for server in seen:
+        server = server.strip()
+        if server:
+            add(server, "claude.ai" if re.match(r"claude[_ .]ai", server, re.I) else "session")
+    return found
+
+
+def usual_hours(now, days=14):
+    """Typical first and last prompt of the day, from recent logs."""
+    by_day = {}
+    for prompt in read_prompts(now - timedelta(days=days)):
+        local = prompt["at"].astimezone()
+        first, last = by_day.get(local.date(), (local, local))
+        by_day[local.date()] = (min(first, local), max(last, local))
+    if not by_day:
+        return None
+
+    def median_clock(times):
+        minutes = sorted(t.hour * 60 + t.minute for t in times)
+        middle = minutes[len(minutes) // 2]
+        return "%02d:%02d" % (middle // 60, middle % 60)
+
+    return {
+        "days_seen": len(by_day),
+        "usual_start": median_clock([first for first, _ in by_day.values()]),
+        "usual_end": median_clock([last for _, last in by_day.values()]),
+    }
+
+
+def _find_program(name):
+    found = shutil.which(name)
+    if found or name != "gh":
+        return found
+    # The GitHub CLI installer doesn't always reach PATH in an open shell.
+    for folder in (os.environ.get("ProgramFiles", ""), "/opt/homebrew/bin", "/usr/local/bin"):
+        candidate = Path(folder) / ("GitHub CLI/gh.exe" if os.name == "nt" else "gh")
+        if folder and candidate.exists():
+            return str(candidate)
+    return None
+
+
+def _run_quiet(args, timeout=5):
+    program = _find_program(args[0])
+    if not program:
+        return ""
+    try:
+        proc = subprocess.run([program] + list(args[1:]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.decode("utf-8", "replace").strip()
+
+
+def detect_environment(cwd, seen=(), now=None):
+    """Everything init can learn without asking, so it only asks the rest."""
+    now = now or datetime.now().astimezone()
+    md = claude_md_path()
+    md_text = md.read_bytes().decode("utf-8", "replace") if md.exists() else ""
+    gh = re.search(r"account (\S+)", _run_quiet(["gh", "auth", "status"]))
+    return {
+        "name": _run_quiet(["git", "config", "--global", "user.name"]) or None,
+        "github_login": gh.group(1) if gh else None,
+        "hours": usual_hours(now),
+        "claude_md": {
+            "path": str(md),
+            "exists": md.exists(),
+            "has_hestia_section": SECTION_START in md_text,
+        },
+        "config": load_config(),
+        "profile": read_json(profile_path()),
+        "connectors": detect_connectors(cwd, seen),
+        "consent": {
+            key: entry.get("consent", "unasked")
+            for key, entry in ((read_json(connectors_path()) or {}).get("connectors") or {}).items()
+        },
+    }
+
+
+def _days_label(days):
+    days = sorted(set(days))
+    if days == list(range(days[0], days[-1] + 1)) and len(days) > 1:
+        return "%s-%s" % (DAY_NAMES[days[0]], DAY_NAMES[days[-1]])
+    return ", ".join(DAY_NAMES[d] for d in days)
+
+
+def render_claude_section(profile, cfg, connectors):
+    """The block that lives in ~/.claude/CLAUDE.md. Short: it loads every session."""
+    lines = [SECTION_START, "## Hestia: about me", ""]
+    if profile.get("name"):
+        lines.append("- Name: %s." % profile["name"])
+    if profile.get("why"):
+        lines.append("- I build because: %s." % profile["why"].rstrip("."))
+    if profile.get("helps"):
+        lines.append("- Right now my work helps: %s." % profile["helps"].rstrip("."))
+    lines.append(
+        "- When you explain a change, say what it does for people first, then how. %s"
+        % TONES.get(profile.get("tone"), TONES["plain"])
+    )
+    lines.append(
+        "- My working days are %s. Hestia pauses agents overnight and resumes at %02d:00; "
+        "after I run /hestia:done, don't suggest more work." % (_days_label(cfg["working_days"]), cfg["resume_hour"])
+    )
+    allowed = sorted(c["name"] for c in connectors.values() if c.get("consent") == "allowed")
+    lines.append(
+        "- Connectors Hestia may use: %s. Don't suggest installing others."
+        % (", ".join(allowed) if allowed else "none")
+    )
+    lines += ["", "<!-- Written by /hestia:init. Re-run it to change this; remove with: hestia.py init remove -->", SECTION_END]
+    return "\n".join(lines)
+
+
+def _find_section(text):
+    start = text.find(SECTION_START)
+    if start < 0:
+        return None
+    end = text.find(SECTION_END, start)
+    if end < 0:
+        raise ValueError("CLAUDE.md has a Hestia start marker but no end marker; fix it by hand")
+    return start, end + len(SECTION_END)
+
+
+def _backup(path):
+    if path.exists():
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        target = hestia_home() / "backups" / ("CLAUDE.md." + stamp)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(path), str(target))
+
+
+def upsert_marked_section(path, block):
+    """Insert or replace the Hestia block. Text outside the markers is kept byte for byte.
+
+    The block is always joined with a single newline on each side, so
+    remove_marked_section can take it out again exactly.
+    """
+    path = Path(path)
+    text = path.read_bytes().decode("utf-8") if path.exists() else ""
+    span = _find_section(text)
+    if span:
+        updated = text[: span[0]] + block + text[span[1]:]
+    elif text:
+        updated = text + "\n" + block + "\n"
+    else:
+        updated = block + "\n"
+    if updated != text:
+        _backup(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(updated.encode("utf-8"))
+    return updated != text
+
+
+def remove_marked_section(path):
+    path = Path(path)
+    if not path.exists():
+        return False
+    text = path.read_bytes().decode("utf-8")
+    span = _find_section(text)
+    if not span:
+        return False
+    block = text[span[0]:span[1]]
+    for joined in ("\n" + block + "\n", block + "\n", block):
+        if joined in text:
+            text = text.replace(joined, "", 1)
+            break
+    _backup(path)
+    if text:
+        path.write_bytes(text.encode("utf-8"))
+    else:
+        path.unlink()  # we created it, so leave nothing behind
+    return True
+
+
+def _clean_answers(raw):
+    answers = {}
+    for field in ("name", "why", "helps"):
+        value = str(raw.get(field) or "").strip()
+        if value:
+            answers[field] = value[:200]
+    if raw.get("tone") in TONES:
+        answers["tone"] = raw["tone"]
+    hour = raw.get("resume_hour")
+    if isinstance(hour, int) and 0 <= hour <= 23:
+        answers["resume_hour"] = hour
+    days = raw.get("working_days")
+    if isinstance(days, list) and days and all(isinstance(d, int) and 0 <= d <= 6 for d in days):
+        answers["working_days"] = sorted(set(days))
+    consent = raw.get("connectors") or {}
+    answers["connectors"] = {
+        connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
+    }
+    return answers
+
+
+def init_write(answers, cwd, seen=(), now=None):
+    """Save the answers everywhere Hestia and Claude read them. Returns what was written."""
+    now = now or datetime.now().astimezone()
+    answers = _clean_answers(answers)
+    detected = detect_environment(cwd, seen, now)
+
+    profile = dict(detected["profile"] or {})
+    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone") if k in answers})
+    profile.setdefault("name", detected["name"])
+    profile.setdefault("tone", "plain")
+    profile["github_login"] = detected["github_login"]
+    profile["hours"] = detected["hours"]
+    profile["updated_at"] = now.isoformat()
+    write_json(profile_path(), profile)
+
+    config_file = hestia_home() / "config.json"
+    raw_config = read_json(config_file) or {}
+    for field in ("resume_hour", "working_days"):
+        if field in answers:
+            raw_config[field] = answers[field]
+    write_json(config_file, raw_config)
+
+    # Re-running init is the one place a "no" can turn into a "yes".
+    connectors = detected["connectors"]
+    for key, entry in connectors.items():
+        entry["consent"] = answers["connectors"].get(key, "unasked")
+        entry["asked_at"] = now.isoformat() if key in answers["connectors"] else None
+    kinds_present = {entry["kind"] for entry in connectors.values()}
+    write_json(
+        connectors_path(),
+        {
+            "version": 1,
+            "checked_at": now.isoformat(),
+            "connectors": connectors,
+            "missing_kinds": [kind for kind, _ in CONNECTOR_KINDS if kind not in kinds_present],
+        },
+    )
+
+    block = render_claude_section(profile, load_config(), connectors)
+    upsert_marked_section(claude_md_path(), block)
+    return {
+        "profile": str(profile_path()),
+        "config": str(config_file),
+        "connectors": str(connectors_path()),
+        "claude_md": str(claude_md_path()),
+        "allowed": sorted(e["name"] for e in connectors.values() if e["consent"] == "allowed"),
+    }
+
+
+def _seen_list(value):
+    return [part for part in re.split(r"[,\s]+", value or "") if part]
+
+
+def cmd_init(args):
+    cwd = os.getcwd()
+    seen = _seen_list(args.seen)
+    if args.action == "remove":
+        removed = remove_marked_section(claude_md_path())
+        print("Removed the Hestia section from %s." % claude_md_path() if removed
+              else "No Hestia section in %s; nothing to remove." % claude_md_path())
+        print("Profile and connector choices are kept in %s; delete that folder to forget them." % hestia_home())
+        return 0
+
+    if args.action == "write":
+        raw = sys.stdin.read() if args.answers == "-" else args.answers
+        try:
+            answers = json.loads(raw or "{}")
+        except ValueError as exc:
+            print("--answers is not valid JSON: %s" % exc, file=sys.stderr)
+            return 1
+        if not isinstance(answers, dict):
+            print("--answers must be a JSON object", file=sys.stderr)
+            return 1
+        try:
+            written = init_write(answers, cwd, seen)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(written, indent=2))
+            return 0
+        print("Hestia knows you now: %s" % written["profile"])
+        print("Every session will see it: section added to %s" % written["claude_md"])
+        print("Connectors allowed: %s. Undo with: hestia.py init remove"
+              % (", ".join(written["allowed"]) or "none"))
+        return 0
+
+    detected = detect_environment(cwd, seen)
+    if args.json:
+        print(json.dumps(detected, indent=2, default=str))
+        return 0
+    hours = detected["hours"]
+    print("Name: %s" % (detected["name"] or "unknown"))
+    print("GitHub: %s" % (detected["github_login"] or "not logged in"))
+    print("Usual day: %s" % ("%s to %s, over %d days" % (hours["usual_start"], hours["usual_end"], hours["days_seen"])
+                             if hours else "no history yet"))
+    print("Connectors: %s" % (", ".join(sorted(detected["connectors"])) or "none found"))
+    print("CLAUDE.md: %s" % ("has a Hestia section" if detected["claude_md"]["has_hestia_section"]
+                             else "exists" if detected["claude_md"]["exists"] else "not created yet"))
+    return 0
+
+
+def cmd_connector(args):
+    """The gate the connectors work calls before touching a connector.
+
+    Exit 0: allowed, go ahead. Exit 10: never asked, ask once now and record
+    the answer with --set. Exit 1: declined or not there, skip silently.
+    """
+    state = read_json(connectors_path()) or {"version": 1, "connectors": {}, "missing_kinds": []}
+    connectors = state.setdefault("connectors", {})
+    key = connector_key(args.name)
+    entry = connectors.get(key)
+    now = datetime.now().astimezone().isoformat()
+
+    if entry is None and (args.present or args.set):
+        # Appeared after init: it gets exactly one question, like the others did.
+        entry = connectors[key] = {
+            "server": args.name,
+            "name": display_name(args.name),
+            "kind": classify_connector(args.name),
+            "source": "session",
+            "status": "available",
+            "tool_prefix": tool_prefix(args.name),
+            "consent": "unasked",
+            "asked_at": None,
+        }
+
+    if args.set:
+        entry["consent"] = args.set
+        entry["asked_at"] = now
+        write_json(connectors_path(), state)
+        print(args.set)
+        return 0
+
+    if entry is None:
+        print("missing")
+        return 1
+    if args.present:
+        write_json(connectors_path(), state)
+    consent = entry.get("consent", "unasked")
+    print(consent if consent != "unasked" else "ask")
+    return {"allowed": 0, "unasked": 10}.get(consent, 1)
+
+
 # --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
@@ -1270,6 +1984,8 @@ def cmd_selftest(args):
         env = os.environ.copy()
         env["HESTIA_HOME"] = str(home)
         env["HESTIA_LOG_DIR"] = str(logs)
+        env["HESTIA_CLAUDE_DIR"] = str(tmp / "claude")
+        env["HESTIA_CLAUDE_JSON"] = str(tmp / "claude.json")
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "hestia selftest"
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "selftest@hestia.local"
 
@@ -1418,6 +2134,21 @@ def cmd_selftest(args):
         proc = run(["new"])
         check("new degrades cleanly offline",
               proc.returncode == 0 and "nothing to do" in proc.stdout.decode())
+        # init: writes the shared context, and leaves the user's own CLAUDE.md alone.
+        claude_md = tmp / "claude" / "CLAUDE.md"
+        claude_md.parent.mkdir()
+        original = b"# My notes\r\nKeep these exactly.\r\n"
+        claude_md.write_bytes(original)
+        answers = {"why": "making things people use", "tone": "plain", "connectors": {"Google_Calendar": "allowed"}}
+        proc = run(["init", "write", "--seen", "Google_Calendar", "--answers", json.dumps(answers)])
+        written = all((home / name).exists() for name in ("profile.json", "config.json", "connectors.json"))
+        check("init writes profile, config and connectors", proc.returncode == 0 and written,
+              proc.stderr.decode().strip()[:200])
+        text = claude_md.read_bytes()
+        check("init keeps CLAUDE.md outside its markers", text.startswith(original)
+              and SECTION_START.encode() in text and b"making things people use" in text)
+        run(["init", "remove"])
+        check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 
     failed = [name for name, ok, _ in checks if not ok]
     print("")
@@ -1463,6 +2194,23 @@ def main(argv=None):
     p.add_argument("--since", default="", help="compare against this version instead")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_new)
+    p = sub.add_parser("init", help="get to know the user once: profile, CLAUDE.md section, connectors")
+    p.add_argument("action", nargs="?", default="detect", choices=["detect", "write", "remove"])
+    p.add_argument("--seen", default="", help="MCP server names Claude can see, comma separated")
+    p.add_argument("--answers", default="", help="write: the user's answers as a JSON object, or - for stdin")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("connector", help="may Hestia use this connector? exit 0 yes, 10 ask once, 1 no")
+    p.add_argument("name", help="connector key or MCP server name")
+    p.add_argument("--present", action="store_true", help="it exists right now, so record it if new")
+    p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
+    p.set_defaults(func=cmd_connector)
+
+    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
+    p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
+    p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
+    p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser("hook", help="PreToolUse hook (reads JSON on stdin)")
     p.set_defaults(func=cmd_hook)

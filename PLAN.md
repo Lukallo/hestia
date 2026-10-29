@@ -1,6 +1,6 @@
 # Hestia: keep up with your AI tools without losing the reason you do the work
 
-> Status: all six commands and the two hooks (`PreToolUse` pause, `SessionStart` handover) are built and tested.
+> Status: all eight commands (the six planned plus `init` and `dashboard`) and the two hooks (`PreToolUse` pause, `SessionStart` handover) are built and tested.
 > Not built yet: the lunch break, the recap on the first prompt after a break, the finish line, catch-up and park.
 > The README's Scope section says why.
 
@@ -59,7 +59,7 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 
 ---
 
-## The suite: 6 commands, 3 automatic behaviours
+## The suite: 8 commands, 3 automatic behaviours
 
 | | What it does | Replaces (the time it gives back) |
 |---|---|---|
@@ -67,6 +67,8 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself. No list for tomorrow, because the day isn't over | The daytime breaks that disappeared along with the waits |
 | `/hestia:back` | Lifts a pause or break early | n/a (the escape hatch) |
 | `/hestia:today` | Only when asked: whether you're paused; today's load (projects, hours from first to last prompt, last real break, unsaved repos); the finish line ("3 of 5 done"); and catch-up on what agents did since your last prompt | Guessing how much you've taken on; watching agents work |
+| `/hestia:init [remove]` | Once: finds what's already set up, asks four skippable questions, records which connectors Hestia may use, and writes a short about-me section to `~/.claude/CLAUDE.md` between markers. Added after the original plan (PR #9) | Re-explaining who you are and why you build to every new session |
+| `/hestia:dashboard` | Only when asked: the `today` reading as one static page, with today's timeline, saved snapshots and tomorrow's list. Added after the original plan (PR #11) | Piecing the day together from `today`, `git` and `TOMORROW.md` |
 | `/hestia:why [target]` | One plain paragraph: who this work helps and what changed for them. Use it for yourself or to paste into an update for a non-technical person | Writing status updates by hand; losing the "why" |
 | `/hestia:new` | Shows only what changed in Claude Code since your version or the last check, then picks the **one** thing relevant to how you work, in five lines | Reading every release note to keep up |
 | *auto* pause | While paused, a `PreToolUse` hook blocks agent tool use: "Clocked out until Mon 08:00, `/hestia:back` if urgent" or "On a break until 13:50" | Overnight agent creep |
@@ -86,6 +88,8 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 | "what today was for" | Restores the romantic part | As a separate command it's one more thing to read, so it **merges into tomorrow's list** as its first line | **Merged** into `done` |
 | finish line | Gives the day an end without an alert. `done` answers *how* to stop; this answers *when* | Could feel like a quota, so it's only the list you wrote yourself, shown only when asked | **Merged** into `done` + `today` |
 | load tracker | Lets you see your workload | As a dashboard or alert it would add attention cost, so it lives inside `today` and is **only shown when asked** | **Merged** into `today` |
+| `init` | Every session explains changes by what they do for people first, with no extra prompts | Writes to a file the user owns, so it only touches text between its own markers, keeps a backup, and `init remove` restores the file byte for byte. A declined connector stays declined | **Kept**, run once |
+| `dashboard` (static page) | One look at the day when you ask for it | A dashboard you keep open becomes a monitor, so it is a static file: no scripts, no network, no refresh, no totals across days, and it only appears when asked | **Kept**, on request only |
 | catch-up | Step away during a long agent run and catch up in seconds, instead of watching it work | Could encourage running more agents at once, so it's only shown when asked and has no alerts | **Merged** into `today` |
 | `why` | Replaces writing updates; keeps the why | Could be fluff, so it's grounded in real commits and prompts from `hestia.py` | **Keep** |
 | `new` | Keeping up without chasing | Network-dependent and could push *more* consumption, so it shows **one** item only, degrades cleanly offline, and shows nothing when there's nothing new | **Keep**, tightly scoped |

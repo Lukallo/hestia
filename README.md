@@ -32,7 +32,7 @@ In Claude Code:
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`, nothing else.
+Needs `git` and `python3`, nothing else. Then run `/hestia:init` once (about a minute, every question skippable).
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -40,8 +40,10 @@ Needs `git` and `python3`, nothing else.
 
 | | Command | What it does |
 |---|---|---|
+| <img src="assets/icons/tend.svg" width="40" alt="Tend icon: lighting the fire for the first time"> | `/hestia:init` | Once: learns your hours and why you build, asks about connectors, adds a short section to `~/.claude/CLAUDE.md` |
 | <img src="assets/icons/kindling.svg" width="40" alt="Kindling icon: one new thing, not the woodpile"> | `/hestia:new` | Shows one thing worth knowing from what changed in Claude Code since your last check |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers icon: reading how warm it's running"> | `/hestia:today` | Whether you're paused, and today's load, only when you ask |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers icon: the same reading on one page"> | `/hestia:dashboard` | The same reading, plus saved work and tomorrow's list, on one static page that never refreshes |
 | <img src="assets/icons/rest.svg" width="40" alt="Rest icon: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself |
 | <img src="assets/icons/home.svg" width="40" alt="Home icon: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, from your real commits and prompts |
 | <img src="assets/icons/bank.svg" width="40" alt="Bank icon: embers covered for the night"> | `/hestia:done [note]` | Saves open work, writes tomorrow's list, pauses Claude until the next working morning |
@@ -57,7 +59,7 @@ On their own: while you're paused, a hook blocks every tool call except `/hestia
 
 ```text
 Clocked out until Fri 30 Oct 08:00.
-  saved 2 files in demo -> refs/hestia/2026-10-29-185346
+  saved 2 files in demo -> refs/hestia/2026-10-29-190613
   tomorrow's list: ~/.hestia/TOMORROW.md
 ```
 
@@ -74,16 +76,19 @@ Snapshots are built through a temporary git index, so your branch, working tree 
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
-| Config | `~/.hestia/config.json` (optional) | delete it |
+| Config | `~/.hestia/config.json` | delete it |
+| Your answers and connector choices | `~/.hestia/profile.json`, `~/.hestia/connectors.json` | delete them, or re-run `/hestia:init` |
+| About-me section | `~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->` | `/hestia:init remove` restores the file byte for byte |
+| Dashboard page | `~/.hestia/dashboard.html` | delete it |
 
-It never edits your `settings.json`, never commits to your branch, and never pushes. Only `/hestia:new` uses the network, to read Claude Code's public changelog.
+It never edits your `settings.json`, never commits to your branch, and never pushes. It touches `CLAUDE.md` only inside its own markers, only when you run `/hestia:init`. Only `/hestia:new` uses the network, to read Claude Code's public changelog.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
 ## What it never does
 
 - No notifications, reminders or nudges: every command runs because you typed it.
-- No dashboard, streaks or scores: numbers appear only when you run `/hestia:today`.
+- No live dashboard, streaks or scores: numbers appear only when you run `/hestia:today` or `/hestia:dashboard`.
 - No summary at shutdown: `/hestia:done` answers in three lines and stops.
 - Nothing runs overnight: unattended agents are stopped and open sessions are paused until morning.
 
@@ -97,7 +102,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 29 checks, 40 tests</b></summary>
+<summary><b>Real output: 32 checks, 63 tests</b></summary>
 
 ```text
 PASS done runs
@@ -129,16 +134,19 @@ PASS why reads today's commits
 PASS new shows only what changed
 PASS new is quiet when nothing changed
 PASS new degrades cleanly offline
+PASS init writes profile, config and connectors
+PASS init keeps CLAUDE.md outside its markers
+PASS init remove restores CLAUDE.md exactly
 
-29/29 checks passed
+32/32 checks passed
 ```
 
 The unittest report (the commands under test also print their own output, left out here):
 
 ```text
-........................................
+...............................................................
 ----------------------------------------------------------------------
-Ran 40 tests in 7.987s
+Ran 63 tests in 15.893s
 
 OK
 ```
@@ -160,7 +168,7 @@ The selftest never touches real processes and reads a local changelog, so it run
 
 ### Config
 
-Optional, at `~/.hestia/config.json` (`working_days`: Monday = 0; `repos` adds repos Claude Code never saw):
+At `~/.hestia/config.json` (written by `/hestia:init`, or by hand) (`working_days`: Monday = 0; `repos` adds repos Claude Code never saw):
 
 ```json
 { "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "repos": ["/Users/you/code/side-project"] }
@@ -168,7 +176,7 @@ Optional, at `~/.hestia/config.json` (`working_days`: Monday = 0; `repos` adds r
 
 ### Without Claude Code
 
-The engine is a plain CLI: `python3 plugins/hestia/scripts/hestia.py done --note "..."`, and likewise `break 45m`, `today`, `back`, `why`, `new`. `done` takes `--until`, `--keep-agents` and `--stop-all`; `break` takes `--stop-agents`; most take `--json`. The old names `shutdown`, `resume` and `status` still work.
+The engine is a plain CLI: `python3 plugins/hestia/scripts/hestia.py done --note "..."`, and likewise `init`, `break 45m`, `today`, `dashboard`, `back`, `why`, `new`. `done` takes `--until`, `--keep-agents` and `--stop-all`; `break` takes `--stop-agents`; `dashboard` takes `--out` and `--no-open`; most take `--json`. The old names `shutdown`, `resume` and `status` still work.
 
 ### How agents are stopped
 

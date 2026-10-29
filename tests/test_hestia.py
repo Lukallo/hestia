@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,8 @@ class TempHome(unittest.TestCase):
         self._env = dict(os.environ)
         os.environ["HESTIA_HOME"] = str(self.home)
         os.environ["HESTIA_LOG_DIR"] = str(self.logs)
+        os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "claude")
+        os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "claude.json")
 
     def tearDown(self):
         os.environ.clear()
@@ -198,6 +201,7 @@ class TestPauseAndHook(TempHome):
             "python hestia.py today",
             "python3 hestia.py resume",  # old alias must still get through
             "python hestia.py status",
+            "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
@@ -410,6 +414,63 @@ class TestBreak(TempHome):
         self.assertEqual(hestia.read_pause()["kind"], "done")
 
 
+class TestWithoutPs(TempHome):
+    """Windows has no `ps`. Finding agents comes back empty instead of crashing."""
+
+    def setUp(self):
+        super().setUp()
+        git_path = shutil.which("git")
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        git_dir = os.path.dirname(git_path) if git_path else ""
+        if os.name == "nt" and git_dir and not shutil.which("ps", path=git_dir):
+            # git.exe is a launcher that finds the rest of Git from its own
+            # folder, so a symlink to it can't work. Git's folder has no ps.
+            bin_dir = Path(git_dir)
+        else:
+            try:
+                os.symlink(git_path, str(bin_dir / os.path.basename(git_path)))
+            except (OSError, TypeError):
+                self.tearDown()  # a skip from setUp never reaches tearDown
+                self.skipTest("needs git and symlinks")
+        # git and nothing else, so `ps` is missing however this machine is set up.
+        os.environ["PATH"] = str(bin_dir)
+
+    def run_in(self, repo, command, args):
+        cwd = os.getcwd()
+        os.chdir(str(repo))
+        try:
+            return command(hestia.argparse.Namespace(**args))
+        finally:
+            os.chdir(cwd)
+
+    def test_no_ps_means_no_agents(self):
+        self.assertEqual(hestia.running_agents(), [])
+
+    def test_done_still_saves_and_pauses(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        code = self.run_in(repo, hestia.cmd_shutdown, {
+            "note": "", "until": "", "json": True,
+            "keep_agents": True,  # never touch real processes from a test
+            "stop_all": False,
+        })
+        self.assertEqual(code, 0)
+        self.assertEqual(hestia.read_pause()["kind"], "done")
+        self.assertIn("refs/hestia/", (self.home / "TOMORROW.md").read_text())
+
+    def test_break_still_saves_and_pauses(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("mid-thought\n")
+        code = self.run_in(repo, hestia.cmd_break, {
+            "length": "30m", "json": True, "stop_agents": False,
+        })
+        self.assertEqual(code, 0)
+        pause = hestia.read_pause()
+        self.assertEqual(pause["kind"], "break")
+        self.assertEqual(len(pause["saved"]), 1)
+
+
 class TestWhy(TempHome):
     def setUp(self):
         super().setUp()
@@ -496,6 +557,214 @@ class TestNew(TempHome):
         self.assertGreater(facts["left_out"], 0)
         # A release cut short by the budget still reports its real size.
         self.assertTrue(all(r["total_changes"] == 40 for r in facts["releases"]))
+class TestClaudeMdSection(TempHome):
+    def setUp(self):
+        super().setUp()
+        self.md = self.tmp / "claude" / "CLAUDE.md"
+        self.md.parent.mkdir()
+
+    def block(self, word):
+        return "%s\n%s\n%s" % (hestia.SECTION_START, word, hestia.SECTION_END)
+
+    def test_insert_then_remove_is_byte_identical(self):
+        for original in (b"# mine\n", b"no trailing newline", b"crlf\r\nlines\r\n"):
+            self.md.write_bytes(original)
+            hestia.upsert_marked_section(self.md, self.block("one"))
+            self.assertTrue(self.md.read_bytes().startswith(original))
+            self.assertTrue(hestia.remove_marked_section(self.md))
+            self.assertEqual(self.md.read_bytes(), original)
+
+    def test_replace_only_touches_the_block(self):
+        self.md.write_bytes(b"before\n")
+        hestia.upsert_marked_section(self.md, self.block("one"))
+        with self.md.open("ab") as handle:
+            handle.write(b"after\n")
+        hestia.upsert_marked_section(self.md, self.block("two"))
+        text = self.md.read_bytes().decode()
+        self.assertTrue(text.startswith("before\n") and text.endswith("after\n"))
+        self.assertIn("two", text)
+        self.assertNotIn("one", text)
+        self.assertEqual(text.count(hestia.SECTION_START), 1)
+
+    def test_upsert_is_idempotent(self):
+        hestia.upsert_marked_section(self.md, self.block("one"))
+        self.assertFalse(hestia.upsert_marked_section(self.md, self.block("one")))
+
+    def test_a_file_we_created_is_removed_again(self):
+        hestia.upsert_marked_section(self.md, self.block("one"))
+        hestia.remove_marked_section(self.md)
+        self.assertFalse(self.md.exists())
+
+    def test_changes_are_backed_up(self):
+        self.md.write_bytes(b"mine\n")
+        hestia.upsert_marked_section(self.md, self.block("one"))
+        backups = list((self.home / "backups").glob("CLAUDE.md.*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b"mine\n")
+
+    def test_half_a_section_is_refused(self):
+        self.md.write_bytes(("x\n%s\nbroken\n" % hestia.SECTION_START).encode())
+        with self.assertRaises(ValueError):
+            hestia.upsert_marked_section(self.md, self.block("one"))
+
+
+class TestConnectorDetection(TempHome):
+    def test_kinds_and_keys(self):
+        self.assertEqual(hestia.classify_connector("claude_ai_Google_Calendar"), "calendar")
+        self.assertEqual(hestia.classify_connector("slack"), "chat")
+        self.assertEqual(hestia.classify_connector("github"), "code")
+        self.assertEqual(hestia.classify_connector("plugin:productivity:linear"), "tasks")
+        self.assertEqual(hestia.classify_connector("claude.ai Reclaim.ai"), "calendar")
+        self.assertEqual(hestia.classify_connector("claude.ai Microsoft 365"), "calendar")
+        self.assertEqual(hestia.classify_connector("claude.ai Todoist"), "tasks")
+        self.assertEqual(hestia.classify_connector("weather"), "other")
+        self.assertEqual(hestia.connector_key("claude.ai Slack"), "slack")
+        self.assertEqual(hestia.display_name("claude_ai_Google_Calendar"), "Google Calendar")
+        self.assertEqual(hestia.tool_prefix("claude.ai Slack"), "mcp__claude_ai_Slack__")
+        self.assertEqual(hestia.connector_key("claude_ai_Google_Calendar"), "google-calendar")
+        self.assertEqual(hestia.tool_prefix("claude_ai_Google_Calendar"), "mcp__claude_ai_Google_Calendar__")
+
+    def test_reads_claude_code_config_and_seen_servers(self):
+        project = self.tmp / "proj"
+        project.mkdir()
+        hestia.write_json(self.tmp / "claude.json", {
+            "mcpServers": {"slack": {}},
+            "projects": {str(project): {"mcpServers": {"github": {}}}, "/elsewhere": {"mcpServers": {"jira": {}}}},
+        })
+        hestia.write_json(project / ".mcp.json", {"mcpServers": {"notion": {}}})
+        found = hestia.detect_connectors(str(project), ["claude_ai_Gmail"])
+        self.assertEqual(sorted(found), ["github", "gmail", "notion", "slack"])
+        self.assertEqual(found["gmail"]["source"], "claude.ai")
+        self.assertEqual(found["github"]["source"], "local")
+        self.assertNotIn("jira", found, "other projects' servers aren't this user's here")
+
+
+class TestInitWrite(TempHome):
+    def write(self, answers, seen=("claude_ai_Google_Calendar", "slack")):
+        return hestia.init_write(answers, str(self.tmp), list(seen))
+
+    def test_writes_everything_from_the_answers(self):
+        hestia.write_json(self.home / "config.json", {"repos": ["/keep/me"]})
+        self.write({
+            "why": "making things people use", "helps": "the food bank volunteers", "tone": "warm",
+            "resume_hour": 9, "working_days": [0, 1, 2, 3],
+            "connectors": {"google-calendar": "allowed", "slack": "declined"},
+        })
+        cfg = hestia.load_config()
+        self.assertEqual((cfg["resume_hour"], cfg["working_days"], cfg["repos"]), (9, [0, 1, 2, 3], ["/keep/me"]))
+        state = hestia.read_json(self.home / "connectors.json")
+        self.assertEqual(state["connectors"]["google-calendar"]["consent"], "allowed")
+        self.assertEqual(state["connectors"]["slack"]["consent"], "declined")
+        self.assertNotIn("calendar", state["missing_kinds"])
+        self.assertIn("email", state["missing_kinds"])
+        text = (self.tmp / "claude" / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn("the food bank volunteers", text)
+        self.assertIn("Mon-Thu", text)
+        self.assertIn("resumes at 09:00", text)
+        self.assertIn("Connectors Hestia may use: Google Calendar.", text)
+
+    def test_bad_answers_fall_back_to_defaults(self):
+        self.write({"tone": "shouty", "resume_hour": 99, "working_days": ["mon"]}, seen=())
+        cfg = hestia.load_config()
+        self.assertEqual(cfg["resume_hour"], hestia.DEFAULT_RESUME_HOUR)
+        self.assertEqual(hestia.read_json(self.home / "profile.json")["tone"], "plain")
+
+    def test_rerun_keeps_earlier_answers(self):
+        self.write({"why": "the craft itself"})
+        self.write({"tone": "detail"})
+        profile = hestia.read_json(self.home / "profile.json")
+        self.assertEqual((profile["why"], profile["tone"]), ("the craft itself", "detail"))
+
+
+class TestConnectorGate(TempHome):
+    def gate(self, name, present=False, set_to=None):
+        args = hestia.argparse.Namespace(name=name, present=present, set=set_to)
+        return hestia.cmd_connector(args)
+
+    def test_asks_once_then_never_again(self):
+        hestia.init_write({}, str(self.tmp), ["slack"])
+        self.assertEqual(self.gate("slack"), 10, "never asked: ask once")
+        self.gate("slack", set_to="declined")
+        for _ in range(3):
+            self.assertEqual(self.gate("slack"), 1, "declined stays declined")
+
+    def test_allowed_goes_ahead(self):
+        hestia.init_write({"connectors": {"slack": "allowed"}}, str(self.tmp), ["slack"])
+        self.assertEqual(self.gate("slack"), 0)
+
+    def test_a_connector_added_later_gets_one_question(self):
+        hestia.init_write({}, str(self.tmp), [])
+        self.assertEqual(self.gate("claude_ai_Gmail"), 1, "unknown and not present: skip silently")
+        self.assertEqual(self.gate("claude_ai_Gmail", present=True), 10)
+        self.gate("claude_ai_Gmail", set_to="allowed")
+        self.assertEqual(self.gate("claude_ai_Gmail"), 0)
+
+    def test_rerunning_init_is_how_a_no_becomes_a_yes(self):
+        hestia.init_write({"connectors": {"slack": "declined"}}, str(self.tmp), ["slack"])
+        self.assertEqual(self.gate("slack"), 1)
+        hestia.init_write({"connectors": {"slack": "allowed"}}, str(self.tmp), ["slack"])
+        self.assertEqual(self.gate("slack"), 0)
+
+
+class TestDashboard(TempHome):
+    def render(self):
+        out = self.tmp / "dashboard.html"
+        args = hestia.argparse.Namespace(out=str(out), no_open=True)
+        self.assertEqual(hestia.cmd_dashboard(args), 0)
+        return out.read_text()
+
+    def write_prompts(self, times):
+        project = self.logs / "-tmp-proj"
+        project.mkdir(exist_ok=True)
+        with (project / "session.jsonl").open("w") as handle:
+            for when in times:
+                handle.write(json.dumps({
+                    "type": "user", "timestamp": when.isoformat(), "cwd": "/tmp/proj",
+                    "message": {"content": "please fix <b>this</b>"},
+                }) + "\n")
+
+    def test_empty_day_still_renders(self):
+        page = self.render()
+        self.assertIn("Working.", page)
+        self.assertIn("No prompts recorded today.", page)
+        self.assertIn("No list yet.", page)
+
+    def test_shows_load_breaks_and_pause(self):
+        now = datetime.now().astimezone()
+        base = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        self.write_prompts([base, base + timedelta(minutes=5), base + timedelta(minutes=50)])
+        hestia.write_json(hestia.pause_path(), {
+            "until": (now + timedelta(hours=8)).isoformat(), "note": "<script>x</script>",
+        })
+        page = self.render()
+        self.assertIn("Clocked out until", page)
+        self.assertIn("45 min", page, "the gap is marked as a break")
+        self.assertIn('class="tick"', page)
+        self.assertNotIn("<script>", page, "everything from logs and notes is escaped")
+        self.assertIn("&lt;script&gt;", page)
+
+    def test_a_break_reads_as_a_break(self):
+        hestia.write_json(hestia.pause_path(), {
+            "kind": "break",
+            "until": (datetime.now().astimezone() + timedelta(minutes=30)).isoformat(),
+        })
+        page = self.render()
+        self.assertIn("On a break until", page)
+        self.assertNotIn("Clocked out", page)
+
+    def test_lists_snapshots_with_the_restore_line(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        hestia.snapshot_repo(repo, "refs/hestia/2026-10-29-180000", "test")
+        hestia.write_json(self.home / "config.json", {"repos": [str(repo)]})
+        page = self.render()
+        self.assertIn("refs/hestia/2026-10-29-180000", page)
+        self.assertIn("checkout refs/hestia/2026-10-29-180000 -- .", page)
+
+    def test_writes_nothing_but_the_page(self):
+        self.render()
+        self.assertFalse(hestia.pause_path().exists())
+        self.assertFalse((self.home / "TOMORROW.md").exists())
 
 
 if __name__ == "__main__":
