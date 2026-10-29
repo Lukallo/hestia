@@ -97,7 +97,7 @@ def load_config():
     path = hestia_home() / "config.json"
     if path.exists():
         try:
-            cfg.update(json.loads(path.read_text()))
+            cfg.update(json.loads(path.read_text(encoding="utf-8")))
         except (ValueError, OSError):
             pass
     return cfg
@@ -105,7 +105,7 @@ def load_config():
 
 def read_json(path, default=None):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return default
 
@@ -113,7 +113,7 @@ def read_json(path, default=None):
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -373,6 +373,17 @@ def snapshot_repo(repo, ref, message):
     return info
 
 
+def restore_line(repo, ref):
+    """The one command that brings saved work back.
+
+    Forward slashes and POSIX quoting keep it pasteable into bash, zsh, Git
+    Bash and PowerShell, including Windows paths and folders with spaces.
+    """
+    import shlex
+
+    return "git -C %s checkout %s -- ." % (shlex.quote(Path(repo).as_posix()), ref)
+
+
 # --------------------------------------------------------------------------
 # running agents
 # --------------------------------------------------------------------------
@@ -622,9 +633,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
                     "" if snap["dirty_files"] == 1 else "s",
                 )
             )
-            lines.append(
-                "  `git -C %s checkout %s -- .`" % (snap["repo"], snap["ref"])
-            )
+            lines.append("  `%s`" % restore_line(snap["repo"], snap["ref"]))
             last = git(snap["repo"], ["log", "-1", "--format=%s"])
             if last.ok and last.out:
                 lines.append("  last commit: %s" % _one_line(last.out, 120))
@@ -702,7 +711,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
 
     path = hestia_home() / "TOMORROW.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
@@ -825,7 +834,7 @@ def cmd_resume(args):
         # doesn't hand the same list over a second time.
         due = handover_due(tomorrow)
         if due and claim_handover(due, via="back"):
-            first = start_here(tomorrow.read_text())
+            first = start_here(tomorrow.read_text(encoding="utf-8", errors="replace"))
             if first:
                 print("Start here: %s" % first)
             fact = overnight_fact(due)
@@ -880,7 +889,7 @@ def cmd_break(args):
                 {
                     "repo": s["repo"],
                     "ref": s["ref"],
-                    "restore": "git -C %s checkout %s -- ." % (s["repo"], s["ref"]),
+                    "restore": restore_line(s["repo"], s["ref"]),
                 }
                 for s in saved
             ],
@@ -1165,11 +1174,11 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     if snapshots:
         snaps = "".join(
             "<li><div>%s <small>%s</small>"
-            '<code class="snap">git -C %s checkout %s -- .</code></div></li>'
+            '<code class="snap">%s</code></div></li>'
             % (
                 _esc(Path(s["repo"]).name),
                 _esc(human(s["at"]) if s["at"] else ""),
-                _esc(s["repo"]), _esc(s["ref"]),
+                _esc(restore_line(s["repo"], s["ref"])),
             )
             for s in snapshots
         )
@@ -1238,7 +1247,7 @@ def cmd_dashboard(args):
     snapshots = list_snapshots(discover_repos(prompts, cfg))
 
     tomorrow_path = hestia_home() / "TOMORROW.md"
-    tomorrow_text = tomorrow_path.read_text() if tomorrow_path.exists() else ""
+    tomorrow_text = tomorrow_path.read_text(encoding="utf-8", errors="replace") if tomorrow_path.exists() else ""
 
     out = Path(args.out) if args.out else hestia_home() / "dashboard.html"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -1544,7 +1553,7 @@ def _deliver_handover(event):
         return 0
     if session_is_headless():
         return 0  # leave it for the person
-    text = tomorrow.read_text().strip()
+    text = tomorrow.read_text(encoding="utf-8", errors="replace").strip()
     if not text:
         return 0
     if not claim_handover(due, via=event, session=str(payload.get("session_id") or ""),
@@ -1623,7 +1632,7 @@ def last_note():
     """The note from the most recent `done`, if the list is still there."""
     tomorrow = hestia_home() / "TOMORROW.md"
     try:
-        for line in tomorrow.read_text().splitlines():
+        for line in tomorrow.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("> "):
                 return line[2:].strip()
     except OSError:
@@ -2312,9 +2321,12 @@ def cmd_selftest(args):
         checks.append((name, ok, detail))
         print("%s %s%s" % ("PASS" if ok else "FAIL", name, (" - " + detail) if detail else ""))
 
+    # A space and text no single code page holds, as real names and notes have.
+    note = "selftest: Łukasz’s café ☕"
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        repo = tmp / "repo"
+        repo = tmp / "my repo"
         repo.mkdir()
         home = tmp / "home"
         logs = tmp / "logs"
@@ -2363,7 +2375,7 @@ def cmd_selftest(args):
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
         # --keep-agents: the selftest must never touch real processes.
-        proc = run(["done", "--note", "selftest", "--next", "rerun the selftest", "--keep-agents", "--json"])
+        proc = run(["done", "--note", note, "--next", "rerun the selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
         check("done runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
@@ -2446,6 +2458,7 @@ def cmd_selftest(args):
         first = handover("prompt-submit")
         check("a window left open gets it on its next prompt", "Where you left off" in first)
         check("handover carries the note", "selftest" in first)
+        check("non-ASCII text survives the night", note in first)
         check("handover leads with where to start", "Start here" in first and "rerun the selftest" in first)
         check("handover says what ran overnight", "Overnight: nothing ran" in first)
         check("handover happens only once", handover() == "" and handover("prompt-submit") == "")
@@ -2502,6 +2515,18 @@ def cmd_selftest(args):
               and (home / "handover.json").read_bytes() == handover_before)
         back = run(["back"]).stdout.decode()
         check("back ends a break early", "On a break since" in back and "Before the break" in back)
+
+        # The restore line is valid shell, even with a space in the path.
+        import shlex
+
+        restore = shlex.split(back.partition("Before the break: ")[2].strip())
+        rungit(["checkout", "--", "."])
+        (repo / "scratch.txt").unlink()
+        if restore:
+            subprocess.run(restore, cwd=str(tmp), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        check("restore line brings the work back",
+              (repo / "scratch.txt").exists()
+              and (repo / "README.md").read_text(encoding="utf-8") == "committed and then edited\n")
         write_target.write_text(json.dumps({"kind": "break", "until": past}))
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("break lifts itself", decision == "allow")
@@ -2555,6 +2580,12 @@ def cmd_selftest(args):
 # --------------------------------------------------------------------------
 
 def main(argv=None):
+    # Claude Code reads hooks and commands as UTF-8 on every OS. Left alone,
+    # Windows uses its ANSI code page here and crashes on names like Łukasz.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(prog="hestia", description="End the working day in Claude Code.")
     sub = parser.add_subparsers(dest="command")
 
