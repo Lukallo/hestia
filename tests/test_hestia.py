@@ -1095,6 +1095,21 @@ class TestDashboard(TempHome):
         self.assertIn("/hestia:back", page)
         self.assertNotIn("<script", page, "the page stays static")
 
+    def test_tomorrows_list_reads_as_a_page_and_stays_escaped(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "TOMORROW.md").write_text(
+            "# Tomorrow - Thu 29 Oct\n\n> ship <it>\n\n## Start here\n\n- fix `parse_row`\n\n"
+            "## Where you left off\n\n- **demo** (main) - 2 files saved\n"
+            "  `git -C /tmp/demo checkout refs/hestia/x -- .`\n"
+        )
+        page = self.render()
+        self.assertIn("<h3>Tomorrow - Thu 29 Oct</h3>", page)
+        self.assertIn("<blockquote>ship &lt;it&gt;</blockquote>", page)
+        self.assertIn('<ul class="start">\n<li>fix <code>parse_row</code>', page)
+        self.assertIn("<strong>demo</strong> (main)", page)
+        self.assertIn('<span class="sub"><code>git -C /tmp/demo checkout refs/hestia/x -- .</code></span>', page)
+        self.assertNotIn("<it>", page)
+
     def test_writes_nothing_but_the_page(self):
         self.render()
         self.assertFalse(hestia.pause_path().exists())

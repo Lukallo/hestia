@@ -996,73 +996,139 @@ def cmd_status(args):
 # no totals, scores or comparisons: only today's facts, and only when asked.
 
 DASHBOARD_CSS = """
-:root { color-scheme: dark; }
+:root { color-scheme: dark;
+  --coal: #1C1714; --raised: #2A211C; --edge: #3A2E27; --ash: #6B615B; --ash-light: #A89E97;
+  --ember: #E8743B; --ember-deep: #C2502A; --gold: #F4B740; --clay: #A4472B; --cream: #F6EDE3;
+  --serif: Georgia, "Times New Roman", serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Consolas, Menlo, monospace; }
 * { box-sizing: border-box; }
 html { background: #120F0D; }
-body { margin: 0; color: #A89E97;
-  font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-main { max-width: 980px; margin: 0 auto; padding: 32px 20px 56px; }
-h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; color: #F6EDE3; font-weight: normal; }
-h1 { font-size: 40px; letter-spacing: 2px; margin: 0; line-height: 1.1; }
-h2 { font-size: 20px; margin: 0 0 14px; }
-code, pre { font-family: ui-monospace, "SF Mono", Consolas, Menlo, monospace; font-size: 13px; }
-code { color: #F4B740; }
-small { font-size: 13px; color: #A89E97; }
-.banner { position: relative; display: flex; align-items: center; gap: 22px; padding: 24px 26px 34px;
-  border-radius: 22px; background: radial-gradient(circle at 70px 60px, rgba(232,116,59,.26), rgba(232,116,59,0) 300px), #1C1714;
-  border: 1px solid #3A2E27; margin-bottom: 18px; overflow: hidden; }
-.banner .tag { font-family: Georgia, serif; font-style: italic; color: #F4B740; font-size: 17px; margin: 4px 0 0; }
-.banner .date { margin: 2px 0 0; font-size: 14px; }
-.banner .key { position: absolute; left: 22px; bottom: 10px; width: calc(100% - 44px); height: 14px; }
+body { margin: 0; color: var(--ash-light); font: 15px/1.6 var(--sans);
+  background: radial-gradient(ellipse 900px 520px at 50% -120px, rgba(232,116,59,.10), transparent 70%); }
+main { max-width: 1040px; margin: 0 auto; padding: 28px 20px 48px; }
+h1, h2, h3 { font-family: var(--serif); color: var(--cream); font-weight: normal; margin: 0; }
+h2 { font-size: 20px; margin-bottom: 16px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+h2 small { font-family: var(--sans); font-size: 13px; color: var(--ash-light); }
+code, pre { font-family: var(--mono); font-size: 13px; }
+code { color: var(--gold); }
+small { font-size: 13px; color: var(--ash-light); }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: var(--ember); margin: 0; }
+
+/* top bar */
+.top { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.top .mark { width: 34px; height: 34px; }
+.top h1 { font-size: 24px; letter-spacing: 1.5px; }
+.top .date { margin-left: auto; font-size: 14px; text-align: right; }
+
+/* the hearth */
+.hero { position: relative; display: grid; grid-template-columns: 250px 1fr; gap: 12px 30px; align-items: center;
+  padding: 26px 32px 44px; border-radius: 26px; border: 1px solid var(--edge); overflow: hidden; margin-bottom: 18px; }
+.hero.tend { background: radial-gradient(circle at 150px 52%, rgba(232,116,59,.42), rgba(232,116,59,0) 300px), linear-gradient(160deg, #2A1D16, #1C1714 60%); }
+.hero.rest { background: radial-gradient(circle at 150px 30%, rgba(244,183,64,.30), rgba(244,183,64,0) 300px), linear-gradient(160deg, #2A2116, #1C1714 60%); }
+.hero.keep { background: radial-gradient(circle at 150px 70%, rgba(194,80,42,.30), rgba(194,80,42,0) 220px), linear-gradient(170deg, #110F14, #1C1714 75%); }
+.hero .scene { width: 250px; height: 230px; }
+.hero .status { font-family: var(--serif); font-size: 40px; line-height: 1.15; color: var(--cream); margin: 8px 0 10px; }
+.hero blockquote { margin: 0 0 14px; padding: 2px 0 2px 14px; border-left: 3px solid var(--clay);
+  font-family: var(--serif); font-style: italic; font-size: 19px; color: var(--cream); opacity: .9; }
+.hero .way { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px;
+  background: rgba(28,23,20,.75); border: 1px solid var(--edge); font-size: 14px; }
+.hero .quiet { margin: 0; font-size: 15px; }
+.hero .key { position: absolute; left: 32px; bottom: 16px; width: calc(100% - 64px); height: 14px; opacity: .85; }
 @keyframes flicker { 0%, 100% { transform: scale(1, 1); } 35% { transform: scale(.97, 1.05); } 70% { transform: scale(1.02, .97); } }
 .flame { transform-origin: 32px 50px; animation: flicker 2.8s ease-in-out infinite; }
+.keep .flame { animation-duration: 4.2s; }
 @media (prefers-reduced-motion: reduce) { .flame { animation: none; } }
-.tile { background: #1C1714; border: 1px solid #3A2E27; border-radius: 18px; padding: 20px 22px; margin-bottom: 18px; }
-.stage { display: flex; gap: 20px; align-items: center; }
-.stage svg { flex: none; }
-.stage .label { font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; color: #E8743B; margin: 0; }
-.status { font-family: Georgia, serif; font-size: 26px; color: #F6EDE3; margin: 2px 0 4px; line-height: 1.25; }
-.status small { display: block; font-family: -apple-system, "Segoe UI", sans-serif; font-size: 15px; margin-top: 4px; }
-.hint { margin: 6px 0 0; }
-.cycle { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid #3A2E27; }
-.cycle .s { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 5px; border-radius: 12px;
-  border: 1px solid #3A2E27; opacity: .45; font-size: 13px; }
-.cycle .s b { display: block; font-family: Georgia, serif; font-weight: normal; color: #F6EDE3; font-size: 15px; line-height: 1.2; }
-.cycle .s.on { opacity: 1; border-color: #E8743B; background: #2A211C; }
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin: 0; }
-.facts div { background: #2A211C; border-radius: 12px; padding: 12px 14px; }
-.facts dt { font-size: 13px; }
-.facts dd { margin: 2px 0 0; font-family: Georgia, serif; font-size: 26px; color: #F6EDE3; font-variant-numeric: tabular-nums; }
-.facts dd small { font-family: -apple-system, "Segoe UI", sans-serif; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } .banner { padding: 18px 18px 30px; } h1 { font-size: 32px; } }
-.grid .tile { margin: 0; }
-ul.plain { list-style: none; margin: 0; padding: 0; }
-ul.plain li { padding: 9px 0; border-top: 1px solid #3A2E27; display: flex; justify-content: space-between; gap: 12px; }
-ul.plain li:first-child { border-top: 0; padding-top: 0; }
-ul.plain li > div { min-width: 0; }
-ul.plain .n { color: #F6EDE3; font-variant-numeric: tabular-nums; }
-.snap { display: block; margin-top: 6px; padding: 7px 10px; background: #0E0B09; border: 1px solid #3A2E27;
-  border-radius: 8px; word-break: break-all; }
-.term { background: #0E0B09; border: 1px solid #3A2E27; border-radius: 12px; overflow: hidden; }
-.term-bar { display: flex; gap: 7px; align-items: center; padding: 7px 12px; background: #2A211C;
-  border-bottom: 1px solid #3A2E27; font: 12px ui-monospace, Consolas, monospace; }
-.term-bar i { width: 9px; height: 9px; border-radius: 50%; background: #3A2E27; }
-.term-bar span { margin-left: 4px; }
-pre { white-space: pre-wrap; margin: 0; padding: 14px 16px; color: #F6EDE3; line-height: 1.55; }
+
+/* the day's path */
+.path { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  padding: 18px 16px 14px; margin-bottom: 18px; background: var(--coal); border: 1px solid var(--edge); border-radius: 20px; }
+.path::before { content: ""; position: absolute; left: 10%; right: 10%; top: 42px; border-top: 2px dotted var(--ash); opacity: .6; }
+.path .s { position: relative; text-align: center; opacity: .42; }
+.path .s svg { display: block; margin: 0 auto 8px; background: var(--coal); border-radius: 12px; }
+.path .s b { display: block; font-family: var(--serif); font-weight: normal; color: var(--cream); font-size: 16px; }
+.path .s span { display: block; font-size: 12px; }
+.path .s.on { opacity: 1; }
+.path .s.on svg { box-shadow: 0 0 0 2px var(--ember), 0 0 26px rgba(232,116,59,.55); }
+.path .s.on .here { display: table; margin: 6px auto 0; white-space: nowrap; font-style: normal; padding: 1px 9px; border-radius: 999px;
+  background: var(--ember); color: var(--coal); font-size: 11px; font-weight: 700; letter-spacing: .5px; }
+.path .here { display: none; }
+
+/* tiles */
+.tile { background: var(--coal); border: 1px solid var(--edge); border-radius: 20px; padding: 22px 24px; margin-bottom: 18px; }
+.facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0; }
+.facts div { background: var(--raised); border: 1px solid var(--edge); border-radius: 14px; padding: 14px 16px; }
+.facts dt { font-size: 12px; text-transform: uppercase; letter-spacing: 1.2px; }
+.facts dd { margin: 4px 0 0; font-family: var(--serif); font-size: 32px; line-height: 1.1; color: var(--cream); font-variant-numeric: tabular-nums; }
+.facts dd small { display: block; font-family: var(--sans); margin-top: 4px; }
 .empty { margin: 0; }
-svg text { fill: #A89E97; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.tick { stroke: #E8743B; stroke-width: 2; stroke-linecap: round; }
-.hit:hover + .tick, .hit:focus + .tick { stroke: #F4B740; stroke-width: 3; }
+
+/* timeline */
+.chart { margin-top: 4px; overflow-x: auto; }
+.chart svg { display: block; overflow: visible; }
+svg text { fill: var(--ash-light); font: 12px var(--sans); }
+.band { fill: var(--raised); }
+.tick { stroke: var(--ember); stroke-width: 2; stroke-linecap: round; }
+.hit:hover + .tick, .hit:focus + .tick { stroke: var(--gold); stroke-width: 3; }
 .hit { fill: transparent; cursor: default; outline: none; }
-.axis { stroke: #3A2E27; stroke-width: 1; }
-.gap { stroke: #6B615B; stroke-width: 1; }
-details { margin-top: 14px; }
-summary { cursor: pointer; font-size: 13px; }
+.axis { stroke: var(--edge); stroke-width: 1; }
+.hour { stroke: var(--edge); stroke-width: 1; stroke-dasharray: 2 4; }
+.gap { stroke: var(--ash); stroke-width: 1.5; }
+.gaplabel { fill: var(--cream); }
+.now { stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.nowlabel { fill: var(--gold); font-weight: 600; }
+details { margin-top: 12px; }
+summary { cursor: pointer; font-size: 13px; color: var(--ash-light); }
 table { border-collapse: collapse; margin-top: 10px; font-size: 13px; width: 100%; }
-th, td { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid #3A2E27; }
-th { color: #F6EDE3; font-weight: normal; }
-footer { margin-top: 28px; font-size: 13px; color: #6B615B; text-align: center; }
+th, td { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid var(--edge); }
+th { color: var(--cream); font-weight: normal; }
+
+/* lower half */
+.split { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; align-items: start; }
+.split .tile { margin: 0; }
+.side { display: grid; gap: 18px; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain > li { padding: 10px 0; border-top: 1px solid var(--edge); }
+ul.plain > li:first-child { border-top: 0; padding-top: 0; }
+.row { display: flex; justify-content: space-between; gap: 12px; }
+.row .n { color: var(--cream); font-variant-numeric: tabular-nums; }
+.repo { color: var(--cream); }
+.restore { display: block; margin-top: 6px; padding: 8px 11px; background: #0E0B09; border: 1px solid var(--edge);
+  border-radius: 9px; word-break: break-all; user-select: all; cursor: text; }
+
+/* tomorrow's list, as a page */
+.letter { position: relative; background: linear-gradient(180deg, #221A16, #1C1714 120px); }
+.letter .file { position: absolute; top: 24px; right: 24px; font: 12px var(--mono); color: var(--ash); }
+.letter h3 { font-size: 26px; margin: 2px 0 14px; }
+.letter blockquote { margin: 0 0 18px; padding: 10px 16px; border-left: 3px solid var(--ember); background: var(--raised);
+  border-radius: 0 10px 10px 0; font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--cream); }
+.letter h4 { margin: 20px 0 8px; font: 600 12px var(--sans); text-transform: uppercase; letter-spacing: 1.5px; color: var(--ember); }
+.letter ul { margin: 0; padding: 0; list-style: none; }
+.letter li { position: relative; padding: 4px 0 4px 18px; color: var(--cream); }
+.letter li::before { content: ""; position: absolute; left: 3px; top: 13px; width: 6px; height: 6px; border-radius: 50%; background: var(--clay); }
+.letter li .sub { display: block; color: var(--ash-light); font-size: 14px; }
+.letter li .sub code { display: inline-block; margin-top: 4px; padding: 5px 9px; background: #0E0B09; border: 1px solid var(--edge);
+  border-radius: 8px; word-break: break-all; user-select: all; }
+.letter .start li { font-family: var(--serif); font-size: 20px; padding-left: 26px; }
+.letter .start li::before { width: 12px; height: 12px; top: 13px; left: 0; background: var(--gold); box-shadow: 0 0 12px rgba(244,183,64,.7); }
+.letter strong { color: var(--cream); font-weight: 600; }
+.letter p { margin: 0 0 8px; }
+
+footer { margin-top: 30px; text-align: center; font-size: 13px; color: var(--ash); }
+footer svg { display: block; width: 100%; height: 14px; margin-bottom: 14px; opacity: .6; }
+
+@media (max-width: 820px) {
+  .hero { grid-template-columns: 1fr; text-align: left; padding: 18px 20px 40px; }
+  .hero .scene { width: 190px; height: 175px; }
+  .hero .status { font-size: 30px; }
+  .facts { grid-template-columns: repeat(2, 1fr); }
+  .split { grid-template-columns: 1fr; }
+  .path { grid-template-columns: repeat(5, minmax(0, 1fr)); padding: 14px 6px 10px; }
+  .path .s span, .path .s.on .here { display: none; }
+  .chart svg { min-width: 640px; }
+  .path .s b { font-size: 13px; }
+  .path::before { top: 38px; }
+}
 """
 
 # The brand's one flame shape (assets/icons/tend.svg) and the stage icons it
@@ -1108,12 +1174,15 @@ STAGES = [
     ("keep", "Keep", "paused overnight"),
     ("relight", "Relight", "the morning list"),
 ]
-GREEK_KEY = (
-    '<svg class="key" aria-hidden="true"><defs><pattern id="key" width="14" height="14" '
-    'patternUnits="userSpaceOnUse"><path d="M0 12.5H14M11.5 12.5V2H3V9H8.5V5.5" fill="none" '
-    'stroke="#A4472B" stroke-width="1.6"/></pattern></defs>'
-    '<rect width="100%" height="14" fill="url(#key)"/></svg>'
-)
+
+
+def _greek_key(cls, pattern_id):
+    return (
+        '<svg class="%s" aria-hidden="true"><defs><pattern id="%s" width="14" height="14" '
+        'patternUnits="userSpaceOnUse"><path d="M0 12.5H14M11.5 12.5V2H3V9H8.5V5.5" fill="none" '
+        'stroke="#A4472B" stroke-width="1.6"/></pattern></defs>'
+        '<rect width="100%%" height="14" fill="url(#%s)"/></svg>' % (cls, pattern_id, pattern_id)
+    )
 
 
 def _icon(stage, size=64):
@@ -1123,6 +1192,43 @@ def _icon(stage, size=64):
         '<rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" '
         'stroke="#3A2E27" stroke-width="1.5"/>%s</svg>' % (size, size, STAGE_ICONS[stage])
     )
+
+
+def _hearth_svg(stage):
+    """The hero picture: one hearth, drawn for the stage you are in.
+
+    A full fire while working, a lower one under the sun on a break, and one
+    guarded ember under the moon at night. Only the flame moves.
+    """
+    scale, color, core = {"tend": (2.5, "#E8743B", True),
+                          "rest": (1.7, "#E8743B", True),
+                          "keep": (1.05, "#C2502A", False)}[stage]
+    fx, fy = 125 - 32 * scale, 166 - 50 * scale
+    sky = ""
+    if stage == "rest":
+        sky = ('<circle cx="206" cy="42" r="15" fill="#F4B740"/>'
+               '<g stroke="#F4B740" stroke-width="3" stroke-linecap="round" opacity=".75">'
+               '<path d="M206 14v-7"/><path d="M178 42h-7"/><path d="M241 42h-7"/>'
+               '<path d="M186 22l-5-5"/><path d="M226 22l5-5"/></g>')
+    elif stage == "keep":
+        sky = ('<circle cx="196" cy="46" r="19" fill="#F4B740"/><circle cx="206" cy="39" r="17" fill="#15121A"/>'
+               '<g fill="#F6EDE3"><circle cx="40" cy="30" r="1.8" opacity=".8"/><circle cx="72" cy="58" r="1.2" opacity=".55"/>'
+               '<circle cx="150" cy="22" r="1.4" opacity=".7"/><circle cx="26" cy="86" r="1" opacity=".45"/>'
+               '<circle cx="228" cy="96" r="1.3" opacity=".5"/><circle cx="110" cy="40" r="1" opacity=".5"/></g>')
+    return (
+        '<svg class="scene" viewBox="0 0 250 230" aria-hidden="true">%(sky)s'
+        '<circle cx="125" cy="128" r="88" fill="none" stroke="#3A2E27" stroke-width="9"/>'
+        '<circle cx="125" cy="128" r="88" fill="none" stroke="#6B615B" stroke-width="2.5" stroke-dasharray="15 10"/>'
+        '<ellipse cx="125" cy="176" rx="%(glow)d" ry="9" fill="%(color)s" opacity=".35"/>'
+        '<g transform="translate(%(fx).1f %(fy).1f) scale(%(scale)s)"><g class="flame">%(flame)s</g></g>'
+        '<rect x="80" y="168" width="90" height="12" rx="6" fill="#6B615B" transform="rotate(-8 125 174)"/>'
+        '<rect x="80" y="168" width="90" height="12" rx="6" fill="#A4472B" transform="rotate(8 125 174)"/>'
+        '<circle cx="104" cy="180" r="2.5" fill="#E8743B"/><circle cx="146" cy="181" r="2" fill="#F4B740"/>'
+        "</svg>"
+    ) % {
+        "sky": sky, "glow": int(26 * scale), "color": color, "fx": fx, "fy": fy, "scale": scale,
+        "flame": FLAME % color + (FLAME_CORE if core else ""),
+    }
 
 
 def _esc(value):
@@ -1152,10 +1258,11 @@ def _timeline_svg(prompts, now, paused):
     """Every prompt today as a tick on the hours it happened in.
 
     Gaps of BREAK_MINUTES or more are marked, because those are the breaks.
-    One series, so no legend: the heading names it.
+    One series, so no legend: the heading names it. Each tick has its own
+    tooltip, and the table under the chart has the same data.
     """
-    width, height = 960, 104
-    left, right, base = 16, 944, 74
+    width, height = 960, 116
+    left, right, top, base = 16, 944, 30, 82
     start = prompts[0]["at"].replace(minute=0, second=0, microsecond=0)
     end_at = prompts[-1]["at"] if paused else max(prompts[-1]["at"], now)
     end = end_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -1168,17 +1275,21 @@ def _timeline_svg(prompts, now, paused):
         '<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-labelledby="tl-title">' % (width, height),
         '<title id="tl-title">Prompts today, from %s to %s</title>'
         % (prompts[0]["at"].strftime("%H:%M"), prompts[-1]["at"].strftime("%H:%M")),
-        '<line class="axis" x1="%d" y1="%d" x2="%d" y2="%d"/>' % (left, base, right, base),
+        '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>' % (left, top - 4, right - left, base - top + 4),
     ]
 
     hours = int(span // 3600)
     step = 1 if hours <= 12 else 2
     for i in range(0, hours + 1, step):
         when = start + timedelta(hours=i)
+        hx = x(when)
+        if left < hx < right:
+            parts.append('<line class="hour" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>' % (hx, top - 4, hx, base))
         parts.append(
             '<text x="%.1f" y="%d" text-anchor="middle">%s</text>'
-            % (min(max(x(when), left + 14), right - 14), base + 22, when.strftime("%H:%M"))
+            % (min(max(hx, left + 14), right - 14), base + 22, when.strftime("%H:%M"))
         )
+    parts.append('<line class="axis" x1="%d" y1="%d" x2="%d" y2="%d"/>' % (left, base, right, base))
 
     for earlier, later in zip(prompts, prompts[1:]):
         minutes = int((later["at"] - earlier["at"]).total_seconds() / 60)
@@ -1187,12 +1298,10 @@ def _timeline_svg(prompts, now, paused):
         x1, x2 = x(earlier["at"]) + 4, x(later["at"]) - 4
         if x2 - x1 < 8:
             continue
-        parts.append(
-            '<path class="gap" d="M%.1f 18v5H%.1fv-5" fill="none"/>' % (x1, x2)
-        )
+        parts.append('<path class="gap" d="M%.1f 14v5H%.1fv-5" fill="none"/>' % (x1, x2))
         if x2 - x1 >= 48:
             parts.append(
-                '<text x="%.1f" y="13" text-anchor="middle">%d min</text>'
+                '<text class="gaplabel" x="%.1f" y="10" text-anchor="middle">%d min</text>'
                 % ((x1 + x2) / 2, minutes)
             )
 
@@ -1200,36 +1309,100 @@ def _timeline_svg(prompts, now, paused):
         px = x(prompt["at"])
         label = "%s · %s" % (prompt["at"].strftime("%H:%M"), Path(prompt["cwd"]).name or "no project")
         parts.append(
-            '<rect class="hit" x="%.1f" y="26" width="10" height="%d" tabindex="0">'
-            '<title>%s</title></rect>' % (px - 5, base - 26, _esc(label))
+            '<rect class="hit" x="%.1f" y="%d" width="12" height="%d" tabindex="0">'
+            '<title>%s</title></rect>' % (px - 6, top - 4, base - top + 4, _esc(label))
         )
-        parts.append('<line class="tick" x1="%.1f" y1="34" x2="%.1f" y2="%d"/>' % (px, px, base - 2))
+        parts.append('<line class="tick" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>' % (px, top + 4, px, base - 4))
+
+    if not paused and start <= now <= end:
+        nx = x(now)
+        parts.append('<line class="now" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>' % (nx, top - 8, nx, base + 4))
+        parts.append(
+            '<text class="nowlabel" x="%.1f" y="%d" text-anchor="%s">now</text>'
+            % (nx + (-5 if nx > right - 40 else 5), top - 12, "end" if nx > right - 40 else "start")
+        )
 
     parts.append("</svg>")
     return "\n".join(parts)
+
+
+def _md_inline(text):
+    text = _esc(text)
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+
+
+def _render_tomorrow(text):
+    """TOMORROW.md as a page: only the few shapes write_tomorrow produces.
+
+    Everything is escaped before the inline marks are turned into tags.
+    """
+    out, in_list, in_item = [], False, False
+
+    def close(level):
+        nonlocal in_list, in_item
+        if in_item:
+            out.append("</li>")
+            in_item = False
+        if level == "list" and in_list:
+            out.append("</ul>")
+            in_list = False
+
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if line.startswith("# "):
+            close("list")
+            out.append("<h3>%s</h3>" % _md_inline(line[2:]))
+        elif line.startswith("> "):
+            close("list")
+            out.append("<blockquote>%s</blockquote>" % _md_inline(line[2:]))
+        elif line.startswith("## "):
+            close("list")
+            title = line[3:].strip()
+            out.append("<h4>%s</h4>" % _md_inline(title))
+            out.append('<ul class="start">' if title == "Start here" else "<ul>")
+            in_list = True
+        elif line.startswith("- "):
+            close("item")
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append("<li>%s" % _md_inline(line[2:]))
+            in_item = True
+        elif line.startswith("  ") and in_item:
+            out.append('<span class="sub">%s</span>' % _md_inline(line.strip()))
+        else:
+            close("list")
+            out.append("<p>%s</p>" % _md_inline(line))
+    close("list")
+    return "\n".join(out)
 
 
 def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     """One self-contained HTML page. No scripts, no network, nothing that refreshes."""
     if pause and pause.get("kind") == "break":
         stage, label = "rest", "On a break"
-        hint = "It lifts itself. <code>/hestia:back</code> ends it early."
+        way = "It lifts itself. <code>/hestia:back</code> ends it early."
     elif pause:
         stage, label = "keep", "Banked for the night"
-        hint = "<code>/hestia:back</code> if tonight can't wait."
+        way = "<code>/hestia:back</code> if tonight can't wait."
     else:
-        stage, label, hint = "tend", "Tending the fire", ""
+        stage, label, way = "tend", "Tending the fire", ""
+        if load["prompts"]:
+            way = "Since %s, across %d project%s." % (
+                load["first"].strftime("%H:%M"), len(load["projects"]),
+                "" if len(load["projects"]) == 1 else "s")
 
-    if pause:
-        status = _esc(pause_line(pause))
-        if pause.get("note"):
-            status += " <small>%s</small>" % _esc(pause["note"])
-    else:
-        status = "Working."
+    status = _esc(pause_line(pause)) if pause else "Working."
+    note = (
+        "<blockquote>%s</blockquote>" % _esc(pause["note"])
+        if pause and pause.get("note") else ""
+    )
 
-    cycle = "".join(
-        '<div class="s%s">%s<span><b>%s</b>%s</span></div>'
-        % (" on" if key == stage else "", _icon(key, 32), name, _esc(what))
+    path = "".join(
+        '<div class="s%s">%s<b>%s</b><span>%s</span><em class="here">you are here</em></div>'
+        % (" on" if key == stage else "", _icon(key, 48), name, _esc(what))
         for key, name, what in STAGES
     )
 
@@ -1256,18 +1429,19 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
             for p in prompts
         )
         timeline = (
-            '<section class="tile"><h2>When you were working</h2>%s'
+            '<section class="tile"><h2>When you were working <small>one mark per prompt, '
+            "gaps of %d minutes or more are breaks</small></h2><div class=\"chart\">%s</div>"
             "<details><summary>As a table</summary>"
             "<table><thead><tr><th>Time</th><th>Project</th></tr></thead><tbody>%s</tbody></table>"
             "</details></section>"
-        ) % (_timeline_svg(prompts, now, bool(pause)), rows)
+        ) % (BREAK_MINUTES, _timeline_svg(prompts, now, bool(pause)), rows)
 
         counts = {}
         for p in prompts:
             if p["cwd"]:
                 counts[p["cwd"]] = counts.get(p["cwd"], 0) + 1
         projects = "".join(
-            '<li><span title="%s">%s</span><span class="n">%d</span></li>'
+            '<li class="row"><span class="repo" title="%s">%s</span><span class="n">%d</span></li>'
             % (_esc(cwd), _esc(Path(cwd).name), n)
             for cwd, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         ) or "<li>none recorded</li>"
@@ -1278,8 +1452,8 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
 
     if snapshots:
         snaps = "".join(
-            "<li><div>%s <small>%s</small>"
-            '<code class="snap">%s</code></div></li>'
+            '<li><div class="row"><span class="repo">%s</span><small>%s</small></div>'
+            '<code class="restore">%s</code></li>'
             % (
                 _esc(Path(s["repo"]).name),
                 _esc(human(s["at"]) if s["at"] else ""),
@@ -1290,12 +1464,16 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     else:
         snaps = "<li>no snapshots yet</li>"
 
-    tomorrow = (
-        '<div class="term"><div class="term-bar"><i></i><i></i><i></i><span>TOMORROW.md</span></div>'
-        "<pre>%s</pre></div>" % _esc(tomorrow_text.strip())
-        if tomorrow_text and tomorrow_text.strip()
-        else '<p class="empty">No list yet. <code>/hestia:done</code> writes one.</p>'
-    )
+    if tomorrow_text and tomorrow_text.strip():
+        tomorrow = (
+            '<section class="tile letter"><span class="file">~/.hestia/TOMORROW.md</span>'
+            '<p class="eyebrow">Tomorrow\'s list</p>%s</section>' % _render_tomorrow(tomorrow_text.strip())
+        )
+    else:
+        tomorrow = (
+            '<section class="tile letter"><p class="eyebrow">Tomorrow\'s list</p>'
+            '<h3>Not written yet</h3><p class="empty">No list yet. <code>/hestia:done</code> writes one.</p></section>'
+        )
 
     return """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -1303,36 +1481,42 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
 <title>Hestia · %(date)s</title>
 <style>%(css)s</style></head>
 <body><main>
-<header class="banner">
-<svg width="76" height="76" viewBox="0 0 64 64" aria-hidden="true"><g class="flame">%(flame)s</g></svg>
-<div><h1>Hestia</h1><p class="tag">Keep the fire going. Don't burn out.</p>
-<p class="date">%(date)s. The same reading as <code>/hestia:today</code>, on one page.</p></div>
+<div class="top">
+<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="14" fill="#1C1714"/>%(mark)s</svg>
+<h1>Hestia</h1>
+<div class="date">%(date)s<br><small>the same reading as <code>/hestia:today</code></small></div>
+</div>
+<section class="hero %(stage)s">
+%(scene)s
+<div><p class="eyebrow">%(label)s</p><p class="status">%(status)s</p>%(note)s%(way)s</div>
 %(key)s
-</header>
-<section class="tile">
-<div class="stage">%(icon)s<div><p class="label">%(label)s</p><p class="status">%(status)s</p>%(hint)s</div></div>
-<div class="cycle" aria-label="Stages of the day">%(cycle)s</div>
 </section>
+<nav class="path" aria-label="Stages of the day">%(path)s</nav>
 <section class="tile"><h2>Today</h2>%(facts)s</section>
 %(timeline)s
-<div class="grid">
-<section class="tile"><h2>Projects</h2><ul class="plain">%(projects)s</ul></section>
-<section class="tile"><h2>Saved work</h2><ul class="plain">%(snaps)s</ul></section>
+<div class="split">
+%(tomorrow)s
+<div class="side">
+<section class="tile"><h2>Saved work <small>click a line to select it</small></h2><ul class="plain">%(snaps)s</ul></section>
+<section class="tile"><h2>Projects <small>prompts today</small></h2><ul class="plain">%(projects)s</ul></section>
 </div>
-<section class="tile" style="margin-top:18px"><h2>Tomorrow's list</h2>%(tomorrow)s</section>
-<footer>Read at %(time)s. This page doesn't refresh: run <code>/hestia:dashboard</code> again for a new reading.</footer>
+</div>
+<footer>%(footkey)s Read at %(time)s. This page doesn't refresh: run <code>/hestia:dashboard</code> again for a new reading.</footer>
 </main></body></html>
 """ % {
         "css": DASHBOARD_CSS,
-        "flame": FLAME % "#E8743B" + FLAME_CORE,
-        "key": GREEK_KEY,
-        "icon": _icon(stage, 72),
+        "mark": STAGE_ICONS["tend"],
+        "stage": stage,
+        "scene": _hearth_svg(stage),
+        "key": _greek_key("key", "key-top"),
+        "footkey": _greek_key("", "key-foot"),
         "label": label,
-        "hint": '<p class="hint">%s</p>' % hint if hint else "",
-        "cycle": cycle,
+        "status": status,
+        "note": note,
+        "way": ('<span class="way">%s</span>' if pause else '<p class="quiet">%s</p>') % way if way else "",
+        "path": path,
         "date": now.strftime("%A %d %B"),
         "time": now.strftime("%H:%M"),
-        "status": status,
         "facts": facts,
         "timeline": timeline,
         "projects": projects,
