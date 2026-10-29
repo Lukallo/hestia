@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 44 checks, 100 tests
+## Prove it: 44 checks, 101 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -426,19 +426,19 @@ PASS init remove restores CLAUDE.md exactly
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 100 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 101 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 100 tests in 21.589s
+Ran 101 tests in 14.415s
 
 OK
 ```
 
-That run was on Linux. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
+That run was on macOS. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
 
 `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: notes, prompts and paths in any language, folders with spaces, the restore line pasted into each shell on the machine, and every hook run the way Claude Code runs it. Where it can, it also recreates Windows' text encodings, so a regression shows up on any machine.
 

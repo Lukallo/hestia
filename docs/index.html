@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hestia: one command that ends the working day in Claude Code</title>
+<meta name="description" content="Hestia is a Claude Code plugin. /hestia:done saves open work without touching your repo, writes tomorrow's list, and stops your agents until morning.">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<style>
+  :root {
+    --coal: #1C1714; --coal-raised: #2A211C; --coal-edge: #3A2E27;
+    --ash: #6B615B; --ash-light: #A89E97;
+    --ember: #E8743B; --ember-deep: #C2502A; --gold: #F4B740;
+    --clay: #A4472B; --cream: #F6EDE3;
+    --serif: Georgia, "Times New Roman", serif;
+    --sans: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: #120f0d; }
+  body { margin: 0; color: var(--ash-light); font: 17px/1.6 var(--sans); }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+  h1, h2, h3 { font-family: var(--serif); color: var(--cream); font-weight: normal; line-height: 1.25; }
+  h2 { font-size: 32px; margin: 0 0 12px; }
+  h3 { font-size: 21px; margin: 0 0 6px; }
+  p { margin: 0 0 14px; }
+  a { color: var(--gold); }
+  code, .cmd { font-family: var(--mono); color: var(--gold); font-size: .92em; }
+  strong { color: var(--cream); font-weight: 600; }
+  img { max-width: 100%; height: auto; display: block; }
+  .divider { margin: 56px auto; opacity: .9; }
+  section { padding: 8px 0; }
+  .lede { font-size: 20px; color: var(--cream); max-width: 760px; }
+  .muted { font-size: 14px; color: var(--ash-light); opacity: .85; }
+
+  /* hero */
+  header { padding: 32px 0 8px; }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 22px 0 6px; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 10px; text-decoration: none;
+         border: 1px solid var(--coal-edge); background: var(--coal-raised); color: var(--cream); font-weight: 600; }
+  .btn.primary { background: var(--ember); border-color: var(--ember); color: var(--coal); }
+  .btn:focus-visible, .tab:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* tiles */
+  .tile { background: var(--coal); border: 1px solid var(--coal-edge); border-radius: 18px; padding: 24px; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 16px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; }
+
+  /* terminal */
+  .term { background: #0e0b09; border: 1px solid var(--coal-edge); border-radius: 12px; margin: 10px 0 16px; overflow: hidden; }
+  .term-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--coal-raised);
+              border-bottom: 1px solid var(--coal-edge); font: 13px var(--mono); color: var(--ash-light); }
+  .term-bar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--coal-edge); }
+  .term-bar .label { margin-left: 6px; }
+  pre { margin: 0; padding: 14px 16px; overflow-x: auto; font: 14px/1.55 var(--mono); color: var(--cream); white-space: pre; }
+  pre .p { color: var(--gold); }
+
+  /* day walkthrough */
+  .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  .tab { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; cursor: pointer;
+         background: var(--coal); border: 1px solid var(--coal-edge); border-radius: 12px;
+         color: var(--ash-light); font: 15px var(--sans); }
+  .tab img { width: 36px; height: 36px; }
+  .tab .t { text-align: left; line-height: 1.2; }
+  .tab .t b { display: block; color: var(--cream); font-family: var(--serif); font-weight: normal; font-size: 17px; }
+  .tab[aria-selected="true"] { border-color: var(--ember); background: var(--coal-raised); }
+  .panel { margin-top: 14px; }
+  .panel[hidden] { display: none; }
+  .panel-head { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 8px; }
+  .panel-head img { width: 64px; height: 64px; flex: none; }
+  .provenance { font-size: 13px; color: var(--ash-light); border-left: 3px solid var(--clay); padding-left: 10px; margin: 6px 0 14px; }
+
+  /* commands */
+  .cmd-card { display: flex; gap: 14px; align-items: flex-start; }
+  .cmd-card img { width: 48px; height: 48px; flex: none; }
+  .cmd-card .cmd { font-size: 15px; display: block; margin-bottom: 4px; }
+  .cmd-card p { font-size: 15px; margin: 0; }
+
+  ul.plain { padding-left: 20px; margin: 0; }
+  ul.plain li { margin-bottom: 8px; }
+  footer { padding: 40px 0 60px; text-align: center; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <img src="assets/banner.svg" alt="Hestia: keep the fire going, don't burn out. A Claude Code plugin." width="960" height="300">
+  <h1 class="lede" style="font-family:var(--sans);margin-top:26px">
+    <strong>One command that ends the working day in Claude Code.</strong>
+    <span class="cmd">/hestia:done</span> saves whatever you have open, writes tomorrow's first move, and stops your agents until morning.
+  </h1>
+  <div class="hero-cta">
+    <a class="btn primary" href="#install">Install</a>
+    <a class="btn" href="#day">See a day, with real output</a>
+    <a class="btn" href="https://github.com/Lukallo/hestia">GitHub</a>
+  </div>
+</header>
+
+<section class="grid3" style="margin-top:28px" aria-label="What it does">
+  <div class="tile">
+    <h3>Your work is saved without being touched</h3>
+    <p>Uncommitted changes in every repo you worked in today go into a <code>refs/hestia/&lt;timestamp&gt;</code> snapshot. Your branch, working tree and index stay exactly as they were.</p>
+  </div>
+  <div class="tile">
+    <h3>The agents stop when you do</h3>
+    <p>Unattended Claude Code runs get <code>SIGTERM</code>. Open sessions are paused by a hook until the next working morning.</p>
+  </div>
+  <div class="tile">
+    <h3>Picking back up is guaranteed, once</h3>
+    <p>However the morning starts, with a new session, a resumed one or the window you left open, the first one you're at after the pause is handed yesterday's list and the first thing to do. Once, then Hestia goes quiet. Scripted runs never take it.</p>
+  </div>
+</section>
+
+<img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
+
+<section aria-labelledby="why-h">
+  <h2 id="why-h">AI removed the natural end of the workday</h2>
+  <div class="grid2">
+    <div>
+      <p>Each task finishes faster, so there's always one more that fits. With agents running, the work keeps going whether you're there or not. Starting work has endless tooling. Ending it has none.</p>
+      <p>People don't stop because stopping feels like dropping something: the fear is losing the thread. <strong>So shutting down is only possible if picking back up is guaranteed.</strong> That is the whole mechanism.</p>
+    </div>
+    <div>
+      <p><strong>Who it's for:</strong> people who build with Claude Code every day, run several sessions or repos at once, and find it hard to stop.</p>
+      <p><strong>The brief:</strong> built for the Claude Code Impact Lab, Dublin: <em>a shutdown command</em>. Its one rule is that it has to give time back, not help you do more.</p>
+    </div>
+  </div>
+  <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="960" height="330" style="margin-top:18px">
+</section>
+
+<img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
+
+<section id="day" aria-labelledby="day-h">
+  <h2 id="day-h">A day with Hestia</h2>
+  <p>Pick a stage of the fire. Every terminal block below is real output from the engine, copied from the project README. Nothing is drawn or retyped.</p>
+
+  <div class="tabs" role="tablist" aria-label="Stages of the day">
+    <button class="tab" role="tab" id="tab-tend" aria-controls="p-tend" aria-selected="true"><img src="assets/icons/embers.svg" alt=""><span class="t"><b>Tend</b>during the day</span></button>
+    <button class="tab" role="tab" id="tab-rest" aria-controls="p-rest" aria-selected="false" tabindex="-1"><img src="assets/icons/rest.svg" alt=""><span class="t"><b>Rest</b>a midday break</span></button>
+    <button class="tab" role="tab" id="tab-bank" aria-controls="p-bank" aria-selected="false" tabindex="-1"><img src="assets/icons/bank.svg" alt=""><span class="t"><b>Bank</b>end the day</span></button>
+    <button class="tab" role="tab" id="tab-keep" aria-controls="p-keep" aria-selected="false" tabindex="-1"><img src="assets/icons/keep.svg" alt=""><span class="t"><b>Keep</b>overnight</span></button>
+    <button class="tab" role="tab" id="tab-relight" aria-controls="p-relight" aria-selected="false" tabindex="-1"><img src="assets/icons/relight.svg" alt=""><span class="t"><b>Relight</b>next morning</span></button>
+  </div>
+
+  <div class="tile panel" role="tabpanel" id="p-tend" aria-labelledby="tab-tend">
+    <div class="panel-head"><img src="assets/icons/embers.svg" alt=""><div>
+      <h3>Checking in, only when you ask</h3>
+      <p><span class="cmd">/hestia:today</span> tells you whether you're paused and how today's load looks. It never shows up on its own.</p>
+    </div></div>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">/hestia:today</span></div>
+<pre>Working.
+  14 prompts across 1 project, 0.8 hours from first to last
+  no break longer than 20 minutes today</pre></div>
+    <p class="provenance">Captured on a real machine with real session history.</p>
+  </div>
+
+  <div class="tile panel" role="tabpanel" id="p-rest" aria-labelledby="tab-rest" hidden>
+    <div class="panel-head"><img src="assets/icons/rest.svg" alt=""><div>
+      <h3>A break that lifts itself</h3>
+      <p><span class="cmd">/hestia:break 45m</span> saves where you are and pauses agents for that long. It writes no list, because the day isn't over. Nothing is killed: a headless run is paused at its next step, so its work is still there when you're back.</p>
+    </div></div>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">/hestia:break 45m</span></div>
+<pre>On a break until 19:27.
+  saved 2 files in demo -&gt; refs/hestia/2026-10-29-184216
+  1 Claude session paused, they'll stop at their next step</pre></div>
+    <p>If an agent tries to edit a file during the break, the <code>PreToolUse</code> hook answers:</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">PreToolUse hook, on an Edit</span></div>
+<pre>{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "On a break until 19:27. Run /hestia:back to end it early."}}</pre></div>
+    <p>Coming back early with <span class="cmd">/hestia:back</span> hands back exactly where you were:</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">/hestia:back</span></div>
+<pre>Back on. On a break since 18:42.
+Before the break: git -C /path/to/demo checkout refs/hestia/2026-10-29-184216 -- .</pre></div>
+    <p class="provenance">From one run against a throwaway repo with <code>HESTIA_HOME</code> in a temp folder. The third line of the break output is a real Claude Code window that was open on the machine. Temp paths are shortened to <code>/path/to/demo</code>.</p>
+  </div>
+
+  <div class="tile panel" role="tabpanel" id="p-bank" aria-labelledby="tab-bank" hidden>
+    <div class="panel-head"><img src="assets/icons/bank.svg" alt=""><div>
+      <h3>One command ends the day</h3>
+      <p><span class="cmd">/hestia:done</span> answers in three lines and stops. A command that ends the day shouldn't give you more to read.</p>
+    </div></div>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">/hestia:done</span></div>
+<pre>Clocked out until Thu 29 Oct 19:17.
+  saved 2 files in demo -&gt; refs/hestia/2026-10-29-191558
+  tomorrow's list: ~/.hestia/TOMORROW.md</pre></div>
+    <p>What it leaves for the morning: your note, the first thing to do, and the exact line to get your work back.</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">~/.hestia/TOMORROW.md</span></div>
+<pre># Tomorrow - Thu 29 Oct
+
+&gt; unblocking the CSV import for the ops team
+
+## Start here
+
+- finish test_import.py for quoted semicolons, then fix parse_row
+
+## Where you left off
+
+- **demo** (main) - 2 files saved
+  `git -C /path/to/demo checkout refs/hestia/2026-10-29-191558 -- .`
+  last commit: Accept semicolon-separated exports in the CSV import
+
+## Today
+
+- no prompts recorded today
+
+## Overnight
+
+- nothing was running</pre></div>
+    <p>The snapshot is built through a temporary git index, so nothing is stashed, nothing is committed to your branch, and the test suite checks that <code>.git/index</code> is byte-identical before and after.</p>
+    <p class="provenance">From a run against a throwaway repo with <code>HESTIA_HOME</code> in a temp folder and <code>--keep-agents</code>, so nothing was signalled. To keep the run short, the night was a two-minute pause. Temp paths are shortened. The throwaway setup has no session history, so <em>Today</em> is empty.</p>
+  </div>
+
+  <div class="tile panel" role="tabpanel" id="p-keep" aria-labelledby="tab-keep" hidden>
+    <div class="panel-head"><img src="assets/icons/keep.svg" alt=""><div>
+      <h3>Nothing runs overnight</h3>
+      <p>Unattended runs got <code>SIGTERM</code> at shutdown, graceful and never <code>SIGKILL</code>. A session you left open isn't killed. The hook stops it at its next step instead:</p>
+    </div></div>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">PreToolUse hook, on an Edit</span></div>
+<pre>{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Clocked out until Thu 29 Oct 19:17. Run /hestia:back if tonight can't wait."}}</pre></div>
+    <p>You can never lock yourself out: <span class="cmd">/hestia:back</span> is explicitly allowed through the pause, and it hands you the thread straight away.</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">/hestia:back</span></div>
+<pre>Back on. Paused since Thu 29 Oct 19:17.
+Start here: finish test_import.py for quoted semicolons, then fix parse_row
+Overnight: nothing ran between Thu 29 Oct 19:17 and Thu 29 Oct 19:18.
+Yesterday's list: ~/.hestia/TOMORROW.md</pre></div>
+    <p class="provenance">The hook answer is from the same run as <em>Bank</em>. The <code>back</code> output is from a second run: <code>/hestia:done</code>, then <code>/hestia:back</code> a minute later.</p>
+  </div>
+
+  <div class="tile panel" role="tabpanel" id="p-relight" aria-labelledby="tab-relight" hidden>
+    <div class="panel-head"><img src="assets/icons/relight.svg" alt=""><div>
+      <h3>Yesterday's list, handed over once</h3>
+      <p>Once the pause runs out, the first prompt you type gets yesterday's list as quiet context, whether you open a new session or come back to the window you left open. Scripted runs never take it, and it is handed over exactly once.</p>
+    </div></div>
+    <p>This is what the next prompt in the window left open overnight received:</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">UserPromptSubmit hook, additionalContext</span></div>
+<pre>Where the last working day was left off, from Hestia, written at shutdown. Keep it in mind to pick up the thread, and do not act on it unless asked. If the user greets you or asks where they were, answer with the 'Start here' item in one sentence. Do not recite the list.
+
+Overnight: nothing ran between Thu 29 Oct 19:15 and Thu 29 Oct 19:17.
+
+# Tomorrow - Thu 29 Oct
+
+&gt; unblocking the CSV import for the ops team
+
+## Start here
+
+- finish test_import.py for quoted semicolons, then fix parse_row</pre></div>
+    <p>A new session opened after that got nothing:</p>
+    <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">hestia.py handover</span></div>
+<pre>Handed over at Thu 29 Oct 19:17.</pre></div>
+    <p class="provenance">Same run as <em>Bank</em>. The context block is cut after <em>Start here</em>; the rest is the same <code>TOMORROW.md</code> shown under <em>Bank</em>.</p>
+  </div>
+</section>
+
+<img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
+
+<section aria-labelledby="cmds-h">
+  <h2 id="cmds-h">Eight commands, three hooks, nothing else</h2>
+  <div class="grid2" style="margin-top:16px">
+    <div class="tile cmd-card"><img src="assets/icons/tend.svg" alt=""><div><span class="cmd">/hestia:init</span><p>Once. Four skippable questions, saved to a marked section of <code>~/.claude/CLAUDE.md</code>.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/bank.svg" alt=""><div><span class="cmd">/hestia:done [note]</span><p>Saves open work, writes tomorrow's list, pauses Claude until the next working morning.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/rest.svg" alt=""><div><span class="cmd">/hestia:break [45m]</span><p>Saves where you are and pauses agents for that long, then lifts itself.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/spark.svg" alt=""><div><span class="cmd">/hestia:back</span><p>Lifts a pause or break early, and tells you where to start and what ran while you were away.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/embers.svg" alt=""><div><span class="cmd">/hestia:today</span><p>Whether you're paused, and today's load. Only ever when you ask.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/embers.svg" alt=""><div><span class="cmd">/hestia:dashboard</span><p>The same reading as one static page. Opens when you ask, never refreshes.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/home.svg" alt=""><div><span class="cmd">/hestia:why [who for]</span><p>One plain paragraph on who today's work helps, built from your real commits.</p></div></div>
+    <div class="tile cmd-card"><img src="assets/icons/kindling.svg" alt=""><div><span class="cmd">/hestia:new</span><p>Shows <strong>one</strong> thing that changed in Claude Code since your last check, in five lines.</p></div></div>
+  </div>
+</section>
+
+<img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
+
+<section id="install" aria-labelledby="install-h">
+  <h2 id="install-h">Get started</h2>
+  <div class="grid2">
+    <div>
+      <p>In Claude Code:</p>
+      <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">Claude Code</span></div>
+<pre><span class="p">/plugin marketplace add Lukallo/hestia</span>
+<span class="p">/plugin install hestia@hestia</span>
+<span class="p">/hestia:init</span></pre></div>
+      <p class="muted">Needs <code>git</code> and Python 3. No other dependencies: the engine is standard library only.</p>
+    </div>
+    <div>
+      <p>At the end of the day:</p>
+      <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">Claude Code</span></div>
+<pre><span class="p">/hestia:done</span></pre></div>
+      <p>Check every claim yourself. One command builds a throwaway repo and runs the whole flow:</p>
+      <div class="term"><div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="label">terminal</span></div>
+<pre><span class="p">python3 plugins/hestia/scripts/hestia.py selftest</span>
+44/44 checks passed</pre></div>
+    </div>
+  </div>
+</section>
+
+<img class="divider" src="assets/meander.svg" alt="" width="960" height="24">
+
+<section aria-labelledby="not-h">
+  <h2 id="not-h">What it deliberately doesn't do</h2>
+  <div class="tile">
+    <ul class="plain">
+      <li><strong>No notifications, reminders or nudges.</strong> Every command runs because you typed it.</li>
+      <li><strong>No live dashboard.</strong> Nothing refreshes and nothing sits open in a tab.</li>
+      <li><strong>No streaks, scores or goals.</strong> Measuring rest turns rest into work.</li>
+      <li><strong>No summary at shutdown.</strong> Three lines, then it stops.</li>
+      <li><strong>No break suggestions.</strong> What you do on a break is yours.</li>
+    </ul>
+  </div>
+  <p class="muted" style="margin-top:14px">Honest limits: agent stopping only reaches Claude Code processes on this machine, found via <code>ps</code>. On Windows the pause works but nothing is signalled. We can't claim burnout goes down. We can claim the day has an end, the agents stopped, and nothing ran between shutdown and morning. <a href="https://github.com/Lukallo/hestia#honest-limitations">All limitations</a>.</p>
+</section>
+
+<footer>
+  <img src="assets/logo.svg" alt="" width="56" height="56" style="margin:0 auto 12px">
+  <p>Hestia, goddess of the hearth. Keep the fire going.</p>
+  <p><a href="https://github.com/Lukallo/hestia">github.com/Lukallo/hestia</a></p>
+</footer>
+
+</div>
+<script>
+  // Tabs: click or arrow keys. Switching is instant; only the flame moves on this page.
+  (function () {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+    function select(tab) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+      });
+    }
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener('click', function () { select(tab); });
+      tab.addEventListener('keydown', function (e) {
+        var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (!d) return;
+        var next = tabs[(i + d + tabs.length) % tabs.length];
+        select(next); next.focus(); e.preventDefault();
+      });
+    });
+  })();
+</script>
+</body>
+</html>
