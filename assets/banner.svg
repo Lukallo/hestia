@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="t d"><title id="t">Hestia</title><desc id="d">Keep the fire going. Don't burn out. A Claude Code plugin.</desc>
+<style>@keyframes flicker{0%,100%{transform:scale(1,1)}35%{transform:scale(.97,1.05)}70%{transform:scale(1.02,.97)}}.flame{transform-origin:32px 50px;animation:flicker 2.8s ease-in-out infinite}@media (prefers-reduced-motion:reduce){.flame{animation:none}}</style>
+<defs>
+<radialGradient id="glow" cx="190" cy="150" r="220" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#E8743B" stop-opacity=".28"/><stop offset="1" stop-color="#E8743B" stop-opacity="0"/></radialGradient>
+<pattern id="key" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M0 21H24M20 21V3H5V15H14V9" fill="none" stroke="#A4472B" stroke-width="2.5" stroke-linecap="square"/></pattern>
+</defs>
+<rect width="960" height="300" rx="24" fill="#1C1714"/>
+<rect width="960" height="300" rx="24" fill="url(#glow)"/>
+<circle cx="190" cy="138" r="78" fill="none" stroke="#3A2E27" stroke-width="8"/>
+<circle cx="190" cy="138" r="78" fill="none" stroke="#6B615B" stroke-width="2.5" stroke-dasharray="14 9"/>
+<ellipse cx="190" cy="188" rx="40" ry="8" fill="#E8743B" opacity=".3"/>
+<g transform="translate(131 66) scale(1.85)"><g class="flame"><path d="M32 10c3 9 13 14 13 27a13 13 0 0 1-26 0c0-6 3-10 6-14 .5 5 2.5 7.5 5 8.5C29 25 29 17 32 10z" fill="#E8743B"/><path d="M32 31c2 4.5 6.5 6.5 6.5 12a6.5 6.5 0 0 1-13 0c0-3.5 2-6 3.5-8 .8 2 1.8 3 3 3.2-.2-2.5-.2-4.7 0-7.2z" fill="#F4B740"/></g></g>
+<text x="320" y="132" font-family="Georgia, 'Times New Roman', serif" font-size="80" letter-spacing="4" fill="#F6EDE3">Hestia</text>
+<text x="324" y="176" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="26" fill="#F4B740">Keep the fire going. Don't burn out.</text>
+<text x="324" y="212" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="17" fill="#A89E97">A Claude Code plugin that banks your work at night,</text>
+<text x="324" y="236" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="17" fill="#A89E97">keeps your agents quiet till morning, and relights where you left off.</text>
+<rect x="24" y="264" width="912" height="24" fill="url(#key)" opacity=".8"/>
+</svg>

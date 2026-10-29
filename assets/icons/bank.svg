@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="t"><title id="t">Bank: /hestia:shutdown</title><rect width="64" height="64" rx="14" fill="#1C1714"/><rect x="0.75" y="0.75" width="62.5" height="62.5" rx="13.25" fill="none" stroke="#3A2E27" stroke-width="1.5"/>
+<ellipse cx="32" cy="47" rx="19" ry="4" fill="#E8743B" opacity=".35"/>
+<path d="M11 47c1-6 5-9.5 9.5-9.5 1.5-5 6-8.5 11.5-8.5s10 3.5 11.5 8.5c4.5 0 8.5 3.5 9.5 9.5z" fill="#6B615B"/>
+<circle cx="21" cy="46" r="2.4" fill="#E8743B"/><circle cx="32" cy="47" r="2.8" fill="#F4B740"/><circle cx="43" cy="46" r="2.4" fill="#E8743B"/>
+<path d="M32 25c-3.5-3 3.5-6 0-10" stroke="#8A817C" stroke-width="2" fill="none" stroke-linecap="round"/>
+</svg>
