@@ -88,7 +88,7 @@ It never edits your `settings.json`, never commits to your branch, and never pus
 ## What it never does
 
 - No notifications, reminders or nudges: every command runs because you typed it.
-- No live dashboard, streaks or scores: numbers appear only when you run `/hestia:today` or `/hestia:dashboard`.
+- No always-on dashboard, streaks or scores: `/hestia:dashboard` only opens when you type it, and nothing pings you.
 - No summary at shutdown: `/hestia:done` answers in three lines and stops.
 - Nothing runs overnight: unattended agents are stopped and open sessions are paused until morning.
 
