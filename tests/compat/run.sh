@@ -36,6 +36,17 @@ pause_now() {
   (cd "$S/work" && python3 "$H" done --until "$(in_30_min)" --keep-agents --note "compat test day" >/dev/null)
 }
 
+night_passes() {  # move the pause's end into the past, as if it ran out overnight
+  python3 - "$HESTIA_HOME/pause.json" <<'PY'
+import json, sys
+from datetime import datetime, timedelta
+path = sys.argv[1]
+data = json.load(open(path))
+data["until"] = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
+json.dump(data, open(path, "w"))
+PY
+}
+
 ask() {
   REPLY_TEXT="$(cd "$S/work" && env -u CLAUDE_CODE_SESSION_ID $TIMEOUT ${TIMEOUT:+240} claude -p "$1" \
       --session-id "$(python3 -c 'import uuid; print(uuid.uuid4())')" \
@@ -76,10 +87,16 @@ fresh; pause_now
 ask "/hestia:back"
 [ ! -e "$HESTIA_HOME/pause.json" ]; check "paused: /hestia:back still gets you out" $?
 
-fresh; pause_now; (cd "$S/work" && python3 "$H" back >/dev/null)
-ask "Without using any tools, answer in two lines: 1) the codeword OTHER_PLUGIN gave you, 2) the note at the top of yesterday's Hestia list, or 'none'."
+fresh; pause_now; night_passes
+MORNING="Without using any tools, answer in two lines: 1) the codeword OTHER_PLUGIN gave you, 2) the note at the top of yesterday's Hestia list, or 'none'."
+ask "$MORNING"  # `claude -p` is a scripted run, so the handover waits for a person
+case "$REPLY_TEXT" in *"compat test day"*) ok=1 ;; *) ok=0 ;; esac
+check "morning: a scripted run doesn't take the handover" $ok
+export HESTIA_SESSION_KIND=interactive  # stands in for a person opening Claude Code
+ask "$MORNING"
+unset HESTIA_SESSION_KIND
 case "$REPLY_TEXT" in *BLUEBERRY*"compat test day"*) ok=0 ;; *) ok=1 ;; esac
-check "morning: Hestia's handover and the other plugin's context both arrive" $ok
+check "morning: a person gets Hestia's handover and the other plugin's context" $ok
 
 echo
 echo "$passed/$total checks passed"

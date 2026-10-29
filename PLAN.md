@@ -1,7 +1,7 @@
 # Hestia: keep up with your AI tools without losing the reason you do the work
 
-> Status: all eight commands (the six planned plus `init` and `dashboard`) and the two hooks (`PreToolUse` pause, `SessionStart` handover) are built and tested.
-> Not built yet: the lunch break, the recap on the first prompt after a break, the finish line, catch-up and park.
+> Status: all eight commands (the six planned plus `init` and `dashboard`) are built and tested, and so are three hooks: `PreToolUse` (pause), and `SessionStart` plus `UserPromptSubmit` (the morning recap, with the overnight fact).
+> Not built yet: the lunch break, a recap after a midday break, the finish line, catch-up and park.
 > The README's Scope section says why.
 
 ## Why "Hestia"

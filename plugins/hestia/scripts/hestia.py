@@ -14,6 +14,8 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
+    hestia.py prompt-submit   # UserPromptSubmit hook, the same handover for a window left open
+    hestia.py handover [--again]  # show whether the morning list is still due, or re-arm it
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
@@ -25,6 +27,7 @@ Environment overrides (used by the tests and selftest):
 """
 
 import argparse
+import shlex
 import hashlib
 import html
 import json
@@ -61,7 +64,7 @@ RESUME_PATTERN = re.compile(
     r"""^
     (?:(?:"[^"]*python[\w.]*"|(?:[^\s"']*[/\\])?python[\w.]*|py(?:\s+-3(?:\.\d+)?)?)\s+)?
     (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
-    \s+(back|resume|today|status|dashboard|hook|session-start|selftest)\b
+    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b
     """,
     re.X | re.I,
 )
@@ -506,6 +509,7 @@ def read_prompts(since):
                         "cwd": entry.get("cwd") or "",
                         "branch": entry.get("gitBranch") or "",
                         "text": text,
+                        "session": entry.get("sessionId") or path.stem,
                     }
                 )
     prompts.sort(key=lambda item: item["at"])
@@ -571,12 +575,36 @@ def discover_repos(prompts, cfg, extra=None):
 # tomorrow's list
 # --------------------------------------------------------------------------
 
-def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open=None):
+def _one_line(text, limit):
+    single = " ".join(str(text).split())
+    return single if len(single) <= limit else single[: limit - 3] + "..."
+
+
+def sessions_to_resume(prompts, limit=3):
+    """The most recent sessions today, one per session, newest first.
+
+    Each comes with the exact command that reopens it, so picking up the
+    thread is one paste, not a search through history.
+    """
+    latest = {}
+    for prompt in prompts:
+        if prompt.get("session"):
+            latest[prompt["session"]] = prompt
+    ordered = sorted(latest.values(), key=lambda p: p["at"], reverse=True)
+    return ordered[:limit]
+
+
+def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open=None, next_step=""):
     stopped = stopped or []
     still_open = still_open or []
     lines = ["# Tomorrow - %s" % now.strftime("%a %d %b"), ""]
     if note:
         lines += ["> %s" % note.strip(), ""]
+
+    # The first thing to do, before anything else, because that is what the
+    # morning actually needs. Written by Claude at shutdown from the session.
+    if next_step and next_step.strip():
+        lines += ["## Start here", "", "- %s" % _one_line(next_step, 300), ""]
 
     lines += ["## Where you left off", ""]
     saved = [s for s in snapshots if s["ref"]]
@@ -595,6 +623,9 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
             lines.append(
                 "  `git -C %s checkout %s -- .`" % (snap["repo"], snap["ref"])
             )
+            last = git(snap["repo"], ["log", "-1", "--format=%s"])
+            if last.ok and last.out:
+                lines.append("  last commit: %s" % _one_line(last.out, 120))
     for snap in clean:
         lines.append(
             "- **%s** (%s) - nothing uncommitted"
@@ -648,14 +679,23 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
         lines.append("- nothing was running")
     lines.append("")
 
+    sessions = sessions_to_resume(prompts)
+    if sessions:
+        lines += ["## Sessions to pick up", ""]
+        for prompt in sessions:
+            where = prompt["cwd"] or "."
+            lines.append(
+                "- **%s** at %s: %s"
+                % (Path(where).name or where, prompt["at"].strftime("%H:%M"), _one_line(prompt["text"], 120))
+            )
+            lines.append("  `cd %s && claude --resume %s`" % (shlex.quote(where), prompt["session"]))
+        lines.append("")
+
     recent = [p["text"] for p in prompts[-5:]]
     if recent:
         lines += ["## The last things you asked for", ""]
         for text in recent:
-            single = " ".join(text.split())
-            if len(single) > 110:
-                single = single[:107] + "..."
-            lines.append("- %s" % single)
+            lines.append("- %s" % _one_line(text, 160))
         lines.append("")
 
     path = hestia_home() / "TOMORROW.md"
@@ -690,7 +730,8 @@ def cmd_shutdown(args):
         stopped, still_open = stop_agents(stop_all=args.stop_all)
 
     tomorrow = write_tomorrow(
-        now, args.note, snapshots, load, prompts, stopped, still_open
+        now, args.note, snapshots, load, prompts, stopped, still_open,
+        next_step=getattr(args, "next", "") or "",
     )
 
     write_json(
@@ -703,11 +744,7 @@ def cmd_shutdown(args):
             "tomorrow": str(tomorrow),
         },
     )
-    # Re-arm the morning handover for this list.
-    write_json(
-        hestia_home() / "handover.json",
-        {"for": tomorrow.stat().st_mtime, "consumed": False},
-    )
+    arm_handover(tomorrow, since=now)
 
     result = {
         "paused_until": until.isoformat(),
@@ -774,12 +811,24 @@ def cmd_resume(args):
             print("Before the break: %s" % saved.get("restore", ""))
         return 0
 
+    now = datetime.now().astimezone()
     if pause:
         print("Back on. Paused since %s." % human(since))
+        record_back(now)
     else:
         print("Not paused.")
     tomorrow = hestia_home() / "TOMORROW.md"
     if tomorrow.exists():
+        # Coming back is a handover too: take it here, so the next prompt
+        # doesn't hand the same list over a second time.
+        due = handover_due(tomorrow)
+        if due and claim_handover(due, via="back"):
+            first = start_here(tomorrow.read_text())
+            if first:
+                print("Start here: %s" % first)
+            fact = overnight_fact(due)
+            if fact:
+                print(fact)
         print("Yesterday's list: %s" % tomorrow)
     return 0
 
@@ -1236,44 +1285,286 @@ def cmd_hook(args):
     return 0
 
 
-def cmd_session_start(args):
-    """SessionStart hook: hand yesterday's list to the new day, once.
+# --------------------------------------------------------------------------
+# the morning handover
+# --------------------------------------------------------------------------
+#
+# Stopping is only possible if picking back up is guaranteed. So the list
+# written at shutdown is handed to the first session that a person is
+# actually at once the pause is over, whichever way the morning starts:
+#
+#   - a new session            -> SessionStart (startup or resume)
+#   - a window left open       -> UserPromptSubmit, on its first prompt
+#   - /hestia:back             -> back takes it itself and prints where to start
+#
+# It is handed over exactly once. The claim is an O_EXCL file named after the
+# list, so two sessions starting in the same instant can't both get it.
+# Scripted runs (claude -p, the Agent SDK) never take it: nobody is there to
+# read it, and taking it would hide it from the person who is.
 
-    This is the other half of the mechanism. Stopping is only possible if
-    picking back up is guaranteed, so the context you left with is given back
-    automatically - but exactly once, or it becomes noise.
+HANDOVER_LEAD = (
+    "Where the last working day was left off, from Hestia, written at shutdown. "
+    "Keep it in mind to pick up the thread, and do not act on it unless asked. "
+    "If the user greets you or asks where they were, answer with the 'Start here' "
+    "item in one sentence. Do not recite the list."
+)
+
+
+def handover_path():
+    return hestia_home() / "handover.json"
+
+
+def _list_key(tomorrow):
+    return str(tomorrow.stat().st_mtime_ns)
+
+
+def _claim_path(key):
+    return hestia_home() / ("handover-%s.taken" % key)
+
+
+def arm_handover(tomorrow, since=None):
+    """A fresh list: forget any earlier claim and make this one due."""
+    for old in hestia_home().glob("handover-*.taken"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    write_json(
+        handover_path(),
+        {
+            "for": _list_key(tomorrow),
+            "consumed": False,
+            "since": (since or datetime.now().astimezone()).isoformat(),
+        },
+    )
+
+
+def record_back(now):
+    """Remember when the pause was lifted early, for the overnight fact."""
+    state = read_json(handover_path())
+    if isinstance(state, dict) and not state.get("consumed"):
+        state["back_at"] = now.isoformat()
+        write_json(handover_path(), state)
+
+
+def handover_due(tomorrow=None):
+    """The handover state if the list is still waiting to be handed over, else None.
+
+    Cheap on purpose: on a normal day this is one or two stat calls.
     """
-    tomorrow = hestia_home() / "TOMORROW.md"
-    if not tomorrow.exists():
-        return 0
+    tomorrow = tomorrow or (hestia_home() / "TOMORROW.md")
+    try:
+        key = _list_key(tomorrow)
+    except OSError:
+        return None  # no list, nothing to hand over
+    if _claim_path(key).exists():
+        return None  # already handed over
+    state = read_json(handover_path()) or {}
+    # Lists armed before claims existed recorded a float mtime instead.
+    if state.get("consumed") and str(state.get("for")) in (key, str(tomorrow.stat().st_mtime)):
+        return None
     if read_pause():
-        return 0  # still clocked out; the list is not due yet
+        return None  # still clocked out; the list is not due yet
+    state = dict(state)
+    state["key"] = key
+    return state
 
-    handover_path = hestia_home() / "handover.json"
-    state = read_json(handover_path) or {}
-    stamp = tomorrow.stat().st_mtime
-    if state.get("consumed") and state.get("for") == stamp:
-        return 0  # already handed over for this list
 
+def claim_handover(due, via, session="", cwd=""):
+    """Take the handover. True for exactly one caller per list."""
+    try:
+        handle = os.open(str(_claim_path(due["key"])), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False  # someone else got it first, or the folder is gone
+    os.close(handle)
+    record = {k: v for k, v in due.items() if k != "key"}
+    record.update(
+        {
+            "for": due["key"],
+            "consumed": True,
+            "at": datetime.now().astimezone().isoformat(),
+            "via": via,
+            "session": session,
+            "cwd": cwd,
+        }
+    )
+    write_json(handover_path(), record)
+    return True
+
+
+def session_is_headless():
+    """True when no person is at this Claude Code session.
+
+    Claude Code tells hooks directly: CLAUDE_CODE_SESSION_ATTENDED is 0 and
+    CLAUDE_CODE_ENTRYPOINT is sdk-* for `claude -p` and Agent SDK runs, and
+    1 / cli for an interactive one. Older versions fall back to the launching
+    process's own flags. When nothing can be told, assume a person is there:
+    a list given to a script is lost, but a list given to a person never is.
+    """
+    forced = os.environ.get("HESTIA_SESSION_KIND", "")
+    if forced:
+        return forced == "headless"
+    attended = os.environ.get("CLAUDE_CODE_SESSION_ATTENDED", "")
+    if attended in ("0", "1"):
+        return attended == "0"
+    entry = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")
+    if entry:
+        return entry.startswith("sdk")
+    pid = os.environ.get("CLAUDE_PID", "")
+    if pid.isdigit():
+        try:
+            proc = subprocess.run(
+                ["ps", "-o", "command=", "-p", pid],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2,
+            )
+            command = proc.stdout.decode("utf-8", "replace") + " "
+            return any(marker in command for marker in HEADLESS_MARKERS)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return False
+
+
+def start_here(text):
+    """The first item under 'Start here' in a list, or ''."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == "## Start here":
+            for item in lines[index + 1:]:
+                if item.startswith("- "):
+                    return item[2:].strip()
+                if item.startswith("## "):
+                    break
+    return ""
+
+
+def _blocked_by_pause(block):
+    text = json.dumps(block.get("content"))
+    return "Clocked out until" in text or "On a break until" in text
+
+
+def overnight_fact(due, now=None):
+    """What actually ran between shutdown and now, read from the session logs.
+
+    A plain fact, never a score: either nothing ran, or how many tool calls
+    did and when the first one was. Tool calls the pause blocked are counted
+    separately, because they are the pause doing its job. `back` itself is
+    left out, since lifting the pause is not work.
+    """
+    since = parse_ts((due or {}).get("since"))
+    if since is None:
+        return ""
+    end = parse_ts(due.get("back_at")) or now or datetime.now().astimezone()
+    uses, blocked = {}, set()
+    root = log_dir()
+    if root.exists():
+        for path in root.glob("*/*.jsonl"):
+            try:
+                if path.stat().st_mtime < since.timestamp():
+                    continue
+                handle = path.open("r", encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            with handle:
+                for line in handle:
+                    if '"tool_use"' not in line and '"tool_result"' not in line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except ValueError:
+                        continue
+                    when = parse_ts(entry.get("timestamp"))
+                    if when is None or not (since <= when <= end):
+                        continue
+                    content = (entry.get("message") or {}).get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "tool_use":
+                            command = str((block.get("input") or {}).get("command") or "")
+                            if RESUME_PATTERN.search(command):
+                                continue
+                            uses[block.get("id")] = (when, entry.get("cwd") or "")
+                        elif block.get("type") == "tool_result" and _blocked_by_pause(block):
+                            blocked.add(block.get("tool_use_id"))
+    ran = sorted(v for k, v in uses.items() if k not in blocked)
+    stopped = len([k for k in uses if k in blocked])
+    window = "between %s and %s" % (human(since), human(end))
+    if not ran:
+        fact = "Overnight: nothing ran %s." % window
+        if stopped:
+            fact += " The pause blocked %d tool call%s." % (stopped, "" if stopped == 1 else "s")
+        return fact
+    first_at, first_cwd = ran[0]
+    return "Overnight: %d tool call%s ran %s, the first at %s%s." % (
+        len(ran), "" if len(ran) == 1 else "s", window, first_at.strftime("%H:%M"),
+        (" in " + Path(first_cwd).name) if first_cwd else "",
+    )
+
+
+def _read_hook_input():
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        raw = sys.stdin.read()
+        data = json.loads(raw) if raw.strip() else {}
+    except (ValueError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _deliver_handover(event):
+    """Shared by both hooks. Silent and immediate unless the list is due."""
+    # Read what Claude Code sends first, as the pause hook does, so it never
+    # writes into a pipe that has already closed.
+    payload = _read_hook_input()
+    tomorrow = hestia_home() / "TOMORROW.md"
+    due = handover_due(tomorrow)
+    if not due:
+        return 0
+    if session_is_headless():
+        return 0  # leave it for the person
     text = tomorrow.read_text().strip()
     if not text:
         return 0
+    if not claim_handover(due, via=event, session=str(payload.get("session_id") or ""),
+                          cwd=str(payload.get("cwd") or "")):
+        return 0
+    fact = overnight_fact(due)
+    context = HANDOVER_LEAD + "\n\n" + ((fact + "\n\n") if fact else "") + text
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}))
+    return 0
 
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": (
-                        "Where the last working day was left off, from Hestia. "
-                        "Use it to pick up the thread; do not act on it unless asked.\n\n"
-                        + text
-                    ),
-                }
-            }
-        )
-    )
-    write_json(handover_path, {"for": stamp, "consumed": True, "at": datetime.now().astimezone().isoformat()})
+
+def cmd_session_start(args):
+    """SessionStart hook: hand yesterday's list to a new or resumed session, once."""
+    return _deliver_handover("SessionStart")
+
+
+def cmd_prompt_submit(args):
+    """UserPromptSubmit hook: the same handover, for a window left open overnight."""
+    return _deliver_handover("UserPromptSubmit")
+
+
+def cmd_handover(args):
+    tomorrow = hestia_home() / "TOMORROW.md"
+    if not tomorrow.exists():
+        print("No list yet. /hestia:done writes one.")
+        return 0
+    if args.again:
+        state = read_json(handover_path()) or {}
+        arm_handover(tomorrow, since=parse_ts(state.get("since")))
+        print("The next session you open will get the list again.")
+        return 0
+    if handover_due(tomorrow):
+        print("Due: the next session you're at will get %s." % tomorrow)
+    elif read_pause():
+        print("Waiting for the pause to end.")
+    else:
+        state = read_json(handover_path()) or {}
+        when = parse_ts(state.get("at"))
+        print("Handed over%s." % ((" at " + human(when)) if when else ""))
     return 0
 
 
@@ -2009,6 +2300,9 @@ def cmd_selftest(args):
         env = os.environ.copy()
         env["HESTIA_HOME"] = str(home)
         env["HESTIA_LOG_DIR"] = str(logs)
+        # Tell the handover a person is at this session, so the selftest gives
+        # the same answer inside an interactive window, a CI job or claude -p.
+        env["HESTIA_SESSION_KIND"] = "interactive"
         env["HESTIA_CLAUDE_DIR"] = str(tmp / "claude")
         env["HESTIA_CLAUDE_JSON"] = str(tmp / "claude.json")
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "hestia selftest"
@@ -2046,7 +2340,7 @@ def cmd_selftest(args):
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
         # --keep-agents: the selftest must never touch real processes.
-        proc = run(["done", "--note", "selftest", "--keep-agents", "--json"])
+        proc = run(["done", "--note", "selftest", "--next", "rerun the selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
         check("done runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
@@ -2100,10 +2394,12 @@ def cmd_selftest(args):
         check("hook blocks connector tools while paused", decision == "deny")
 
         # The morning handover: not while paused, once afterwards, then silent.
-        def handover():
+        def handover(event="session-start", kind="interactive"):
             got = subprocess.run(
-                [sys.executable, str(script), "session-start"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                [sys.executable, str(script), event],
+                input=b'{"session_id": "selftest", "cwd": "/selftest"}',
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=dict(env, HESTIA_SESSION_KIND=kind),
             ).stdout.decode().strip()
             if not got:
                 return ""
@@ -2111,16 +2407,41 @@ def cmd_selftest(args):
 
         check("no handover while still paused", handover() == "")
 
+        # Morning: the pause runs out on its own.
+        pause_file = home / "pause.json"
+        overnight = json.loads(pause_file.read_text())
+        overnight["until"] = (datetime.now().astimezone() - timedelta(minutes=1)).isoformat()
+        pause_file.write_text(json.dumps(overnight))
+
+        check("scripted runs never take the list", handover(kind="headless") == "")
+
+        first = handover("prompt-submit")
+        check("a window left open gets it on its next prompt", "Where you left off" in first)
+        check("handover carries the note", "selftest" in first)
+        check("handover leads with where to start", "Start here" in first and "rerun the selftest" in first)
+        check("handover says what ran overnight", "Overnight: nothing ran" in first)
+        check("handover happens only once", handover() == "" and handover("prompt-submit") == "")
+
+        # Eight sessions starting in the same instant: exactly one gets it.
+        run(["handover", "--again"])
+        racers = [
+            subprocess.Popen(
+                [sys.executable, str(script), "session-start" if i % 2 else "prompt-submit"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            )
+            for i in range(8)
+        ]
+        outputs = [racer.communicate()[0].decode().strip() for racer in racers]
+        check("sessions starting together get it once", len([o for o in outputs if o]) == 1)
+
+        run(["handover", "--again"])
+        check("morning gets yesterday's list", "Where you left off" in handover())
+
         proc = run(["back"])
         check("back runs", proc.returncode == 0)
 
         check("old names still work as aliases", run(["status"]).returncode == 0
               and run(["today"]).returncode == 0)
-
-        first = handover()
-        check("morning gets yesterday's list", "Where you left off" in first)
-        check("handover carries the note", "selftest" in first)
-        check("handover happens only once", handover() == "")
 
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("hook is silent after back", decision == "allow")
@@ -2207,6 +2528,7 @@ def main(argv=None):
     # The old names stay as aliases, so anything already wired up keeps working.
     p = sub.add_parser("done", aliases=["shutdown"], help="save open work, write tomorrow's list, pause agents")
     p.add_argument("--note", default="", help="one line about what today was for")
+    p.add_argument("--next", default="", help="the first thing to do next time, for the top of the list")
     p.add_argument("--until", default="", help="HH:MM or ISO timestamp (default: next working morning)")
     p.add_argument("--keep-agents", action="store_true", help="report running agents but don't stop them")
     p.add_argument("--stop-all", action="store_true", help="also stop interactive Claude sessions")
@@ -2259,6 +2581,13 @@ def main(argv=None):
 
     p = sub.add_parser("session-start", help="SessionStart hook: hand over yesterday's list, once")
     p.set_defaults(func=cmd_session_start)
+
+    p = sub.add_parser("prompt-submit", help="UserPromptSubmit hook: the handover for a window left open")
+    p.set_defaults(func=cmd_prompt_submit)
+
+    p = sub.add_parser("handover", help="is the morning list still due? --again re-arms it")
+    p.add_argument("--again", action="store_true", help="hand the list over once more")
+    p.set_defaults(func=cmd_handover)
 
     p = sub.add_parser("selftest", help="prove the whole flow on a throwaway repo")
     p.set_defaults(func=cmd_selftest)
