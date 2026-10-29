@@ -76,7 +76,7 @@ someone's work.
 
 | Slash command | Engine call | Writes | Notes |
 |---|---|---|---|
-| `/hestia:done [note]` | `done --note ... --next ...` | snapshot refs, `TOMORROW.md`, `pause.json` (kind `done`), `handover.json` (re-armed) | SIGTERMs headless agents unless `--keep-agents` |
+| `/hestia:done [note]` | `dream plan`, `dream check`, then `done --note ... --next ...` | `backups/memory/<ts>/`, tidied auto-memory files, snapshot refs, `TOMORROW.md`, `pause.json` (kind `done`), `handover.json` (re-armed) | Tidies memory first, because the pause blocks tools. SIGTERMs headless agents unless `--keep-agents` |
 | `/hestia:break [45m]` | `break [length]` | snapshot refs, `pause.json` (kind `break`) | Writes no list and never touches `handover.json`. Signals nothing unless `--stop-agents` |
 | `/hestia:back` | `back` | deletes `pause.json` | After a break it prints restore lines; after `done` it points to the list |
 | `/hestia:today` | `today` | nothing | Only ever shown when asked |
@@ -198,9 +198,13 @@ These protect the person whose machine you are running on.
 - **Never add a network call** outside `new`, and never send anything
   anywhere. `why` writes a paragraph; it does not post it.
 - **Never edit the user's `settings.json`.** Paths go through
-  `${CLAUDE_PLUGIN_ROOT}`. The only file outside `~/.hestia` that Hestia writes
-  is `~/.claude/CLAUDE.md`, and only between its markers, during `init`. Tests
-  redirect it with `HESTIA_CLAUDE_DIR` and `HESTIA_CLAUDE_JSON`.
+  `${CLAUDE_PLUGIN_ROOT}`. Outside `~/.hestia`, Hestia writes only two things:
+  `~/.claude/CLAUDE.md`, between its markers, during `init`; and the auto-memory
+  folders (`~/.claude/projects/<project>/memory/`) of projects touched today,
+  during `done`, always after `dream plan` has backed them up. `dream check`
+  rolls back any folder with broken frontmatter, a dangling index link or a new
+  file: Hestia never adds a memory. Tests redirect these with
+  `HESTIA_CLAUDE_DIR`, `HESTIA_CLAUDE_JSON` and `HESTIA_MEMORY_ROOT`.
 
 ## 6. Checks
 

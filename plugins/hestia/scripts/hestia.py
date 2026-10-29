@@ -16,6 +16,7 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py prompt-submit   # UserPromptSubmit hook, the same handover for a window left open
     hestia.py handover [--again]  # show whether the morning list is still due, or re-arm it
+    hestia.py dream plan|check|restore [--backup ID] [--json]  # tidy Claude's memory at done
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
@@ -24,6 +25,7 @@ Environment overrides (used by the tests and selftest):
     HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
     HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
+    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
 """
 
 import argparse
@@ -39,6 +41,7 @@ import sys
 import tempfile
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 BREAK_MINUTES = 20
@@ -65,7 +68,7 @@ RESUME_PATTERN = re.compile(
     r"""^
     (?:(?:"[^"]*(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)"|(?:[^\s"']*[/\\])?(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)|py(?:\s+-3(?:\.\d+)?)?)\s+)?
     (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
-    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b
+    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest|dream\s+restore)\b
     """,
     re.X | re.I,
 )
@@ -2138,6 +2141,8 @@ def _clean_answers(raw):
         answers["working_days"] = sorted(set(days))
     if isinstance(raw.get("screen"), bool):
         answers["screen"] = raw["screen"]
+    if isinstance(raw.get("dream"), bool):
+        answers["dream"] = raw["dream"]
     consent = raw.get("connectors") or {}
     answers["connectors"] = {
         connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
@@ -2152,9 +2157,10 @@ def init_write(answers, cwd, seen=(), now=None):
     detected = detect_environment(cwd, seen, now)
 
     profile = dict(detected["profile"] or {})
-    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone") if k in answers})
+    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone", "dream") if k in answers})
     profile.setdefault("name", detected["name"])
     profile.setdefault("tone", "plain")
+    profile.setdefault("dream", True)
     profile["github_login"] = detected["github_login"]
     profile["hours"] = detected["hours"]
     profile["updated_at"] = now.isoformat()
@@ -2291,6 +2297,270 @@ def cmd_connector(args):
 
 
 # --------------------------------------------------------------------------
+# dream: tidy Claude's auto memory as the day ends
+# --------------------------------------------------------------------------
+#
+# Claude Code keeps auto memory in ~/.claude/projects/<project>/memory/: a
+# MEMORY.md index plus one file per topic. Only the first 200 lines (25 KB) of
+# the index load each session, so a long or messy index silently loses facts.
+# At `done` the ending session tidies it: plan (backup + facts), Claude edits,
+# check (validate, or roll back). Hestia never writes a memory itself.
+
+MEMORY_INDEX = "MEMORY.md"
+MEMORY_LOAD_LINES = 200
+MEMORY_LOAD_BYTES = 25 * 1024
+LINK_PATTERN = re.compile(r"\]\(([^)\s]+\.md)\)")
+
+
+def memory_root():
+    return Path(os.environ.get("HESTIA_MEMORY_ROOT") or (Path.home() / ".claude" / "projects"))
+
+
+def memory_slug(path):
+    """How Claude Code names a project folder: every non-alphanumeric becomes '-'."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def memory_dirs_for(cwd):
+    """The memory folder for a working directory, trying the folder and its git root."""
+    candidates = [Path(cwd)]
+    top = git_toplevel(Path(cwd)) if Path(cwd).is_dir() else None
+    if top is not None:
+        candidates.append(top)
+    found = []
+    for candidate in candidates:
+        folder = memory_root() / memory_slug(candidate) / "memory"
+        if folder.is_dir() and folder not in found:
+            found.append(folder)
+    return found
+
+
+def auto_memory_off():
+    """Why auto memory is off, or None. Honours Claude Code's own switches."""
+    if os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "").strip() not in ("", "0", "false"):
+        return "auto memory is turned off (CLAUDE_CODE_DISABLE_AUTO_MEMORY)"
+    settings = read_json(claude_dir() / "settings.json") or {}
+    if settings.get("autoMemoryEnabled") is False:
+        return "auto memory is turned off in Claude Code's settings"
+    if settings.get("autoMemoryDirectory"):
+        return "auto memory lives in a custom folder, which Hestia leaves alone"
+    if (read_json(profile_path()) or {}).get("dream") is False:
+        return "memory tidying is turned off in /hestia:init"
+    return None
+
+
+def parse_memory_file(path):
+    """Frontmatter of one memory file: {'name', 'description', 'type'} or None if broken."""
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return None
+    fields = {}
+    for line in lines[1:end]:
+        match = re.match(r"\s*([A-Za-z_]+)\s*:\s*(.*)$", line)
+        if match:
+            fields[match.group(1).lower()] = match.group(2).strip()
+    if not fields.get("name") or not fields.get("description"):
+        return None
+    return {"name": fields["name"], "description": fields["description"], "type": fields.get("type", "")}
+
+
+def _normal(text):
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def memory_findings(folder):
+    """Facts about one memory folder. Deterministic; the tidying is Claude's."""
+    index_path = folder / MEMORY_INDEX
+    index_text = index_path.read_bytes().decode("utf-8", "replace") if index_path.exists() else ""
+    linked = set(LINK_PATTERN.findall(index_text))
+    files, broken = [], []
+    for path in sorted(folder.glob("*.md")):
+        if path.name == MEMORY_INDEX:
+            continue
+        meta = parse_memory_file(path)
+        if meta is None:
+            broken.append(path.name)
+            continue
+        files.append(dict(meta, file=path.name, lines=len(path.read_bytes().splitlines())))
+
+    duplicates = []
+    for i, first in enumerate(files):
+        for second in files[i + 1:]:
+            same_name = _normal(first["name"]) == _normal(second["name"])
+            close = SequenceMatcher(None, _normal(first["description"]), _normal(second["description"])).ratio()
+            if same_name or close >= 0.8:
+                duplicates.append([first["file"], second["file"]])
+
+    names = {f["file"] for f in files} | set(broken)
+    index_lines = len(index_text.splitlines())
+    return {
+        "folder": str(folder),
+        "files": files,
+        "broken": broken,
+        "missing_from_index": sorted(names - linked),
+        "index_points_to_missing": sorted(link for link in linked if not (folder / link).exists()),
+        "duplicates": duplicates,
+        "index_lines": index_lines,
+        "index_bytes": len(index_text.encode("utf-8")),
+        "over_load_limit": index_lines > MEMORY_LOAD_LINES or len(index_text.encode("utf-8")) > MEMORY_LOAD_BYTES,
+    }
+
+
+def _memory_backup_root():
+    return hestia_home() / "backups" / "memory"
+
+
+def _copy_folder(source, target):
+    if target.exists():
+        shutil.rmtree(str(target))
+    shutil.copytree(str(source), str(target))
+
+
+def dream_plan(now=None):
+    """Back up today's projects' memory and return the facts to tidy from."""
+    now = now or datetime.now().astimezone()
+    off = auto_memory_off()
+    if off:
+        return {"backup": None, "projects": [], "skipped": off}
+
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    prompts = read_prompts(start_of_day)
+    cwds = []
+    for cwd in [p["cwd"] for p in prompts if p["cwd"]] + [os.getcwd()]:
+        if cwd not in cwds:
+            cwds.append(cwd)
+
+    projects, seen = [], set()
+    for cwd in cwds:
+        for folder in memory_dirs_for(cwd):
+            if str(folder) in seen or not any(p.name != MEMORY_INDEX for p in folder.glob("*.md")):
+                continue
+            seen.add(str(folder))
+            facts = memory_findings(folder)
+            facts["prompts_today"] = [
+                p["text"][:200] for p in prompts if p["cwd"] and _same_path(p["cwd"], cwd)
+            ][-15:]
+            projects.append(facts)
+
+    if not projects:
+        return {"backup": None, "projects": [], "skipped": "no memory to tidy"}
+
+    backup = now.strftime("%Y-%m-%d-%H%M%S")
+    root = _memory_backup_root() / backup
+    manifest = {}
+    for facts in projects:
+        folder = Path(facts["folder"])
+        key = folder.parent.name
+        _copy_folder(folder, root / key)
+        manifest[key] = str(folder)
+    write_json(root / "manifest.json", manifest)
+    return {"backup": backup, "projects": projects, "skipped": None}
+
+
+def _latest_backup():
+    root = _memory_backup_root()
+    found = sorted(p.name for p in root.iterdir() if (p / "manifest.json").exists()) if root.exists() else []
+    return found[-1] if found else None
+
+
+def dream_restore(backup=None):
+    """Put every folder in a backup back exactly. Returns the folders restored."""
+    backup = backup or _latest_backup()
+    if not backup:
+        return []
+    root = _memory_backup_root() / backup
+    manifest = read_json(root / "manifest.json") or {}
+    restored = []
+    for key, folder in manifest.items():
+        _copy_folder(root / key, Path(folder))
+        restored.append(folder)
+    return restored
+
+
+def dream_check(backup):
+    """Validate the tidy against its backup. A folder that fails is rolled back."""
+    root = _memory_backup_root() / backup
+    manifest = read_json(root / "manifest.json")
+    if manifest is None:
+        raise ValueError("no memory backup called %s" % backup)
+    results = []
+    for key, folder in manifest.items():
+        folder, before = Path(folder), root / key
+        old = {p.name: p.read_bytes() for p in before.glob("*.md")}
+        new = {p.name: p.read_bytes() for p in folder.glob("*.md")} if folder.is_dir() else {}
+        facts = memory_findings(folder) if folder.is_dir() else None
+        problems = []
+        if facts is None:
+            problems.append("the memory folder is gone")
+        else:
+            if facts["broken"]:
+                problems.append("broken frontmatter: %s" % ", ".join(facts["broken"]))
+            if facts["index_points_to_missing"]:
+                problems.append("index links to missing files: %s" % ", ".join(facts["index_points_to_missing"]))
+        added = sorted(set(new) - set(old))
+        if added:
+            problems.append("new files are not allowed (Hestia never adds memories): %s" % ", ".join(added))
+        result = {
+            "folder": str(folder),
+            "removed": sorted(set(old) - set(new)),
+            "edited": sorted(n for n in set(old) & set(new) if old[n] != new[n] and n != MEMORY_INDEX),
+            "index_changed": old.get(MEMORY_INDEX) != new.get(MEMORY_INDEX),
+            "problems": problems,
+            "rolled_back": False,
+        }
+        if problems:
+            _copy_folder(before, folder)
+            result["rolled_back"] = True
+        results.append(result)
+    return results
+
+
+def cmd_dream(args):
+    try:
+        if args.action == "plan":
+            result = dream_plan()
+        elif args.action == "check":
+            backup = args.backup or _latest_backup()
+            if not backup:
+                print("no memory backup to check against", file=sys.stderr)
+                return 1
+            result = {"backup": backup, "projects": dream_check(backup)}
+        else:
+            result = {"restored": dream_restore(args.backup or None)}
+    except (ValueError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.action == "plan":
+        if result["skipped"]:
+            print("Nothing to tidy: %s." % result["skipped"])
+        else:
+            print("Backed up %d memory folder(s) as %s." % (len(result["projects"]), result["backup"]))
+    elif args.action == "check":
+        for project in result["projects"]:
+            if project["rolled_back"]:
+                print("Rolled back %s: %s" % (project["folder"], "; ".join(project["problems"])))
+            else:
+                print("%s: %d removed, %d edited%s" % (project["folder"], len(project["removed"]),
+                      len(project["edited"]), ", index updated" if project["index_changed"] else ""))
+    else:
+        print("Restored %d memory folder(s)." % len(result["restored"]) if result["restored"]
+              else "No memory backup to restore.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
 
@@ -2340,6 +2610,7 @@ def cmd_selftest(args):
         env["HESTIA_SESSION_KIND"] = "interactive"
         env["HESTIA_CLAUDE_DIR"] = str(tmp / "claude")
         env["HESTIA_CLAUDE_JSON"] = str(tmp / "claude.json")
+        env["HESTIA_MEMORY_ROOT"] = str(tmp / "memory-root")
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "hestia selftest"
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "selftest@hestia.local"
 
@@ -2571,6 +2842,31 @@ def cmd_selftest(args):
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
 
+        # dream: backs up the repo's auto memory, rolls back a bad tidy, restores exactly.
+        # Name the folder from git's view of the repo, as Hestia looks it up
+        # (macOS temp paths sit behind a /var -> /private/var symlink).
+        top = rungit(["rev-parse", "--show-toplevel"]).stdout.decode().strip()
+        memory = tmp / "memory-root" / memory_slug(Path(top)) / "memory"
+        memory.mkdir(parents=True)
+        (memory / "MEMORY.md").write_bytes(b"- [Tabs](tabs.md) - indent with tabs\n")
+        (memory / "tabs.md").write_bytes(b"---\nname: tabs\ndescription: indent with tabs\n---\nUse tabs.\n")
+        before = {p.name: p.read_bytes() for p in memory.iterdir()}
+        env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        proc = run(["dream", "plan", "--json"])
+        plan = json.loads(proc.stdout.decode() or "{}")
+        check("dream plan backs up today's memory", proc.returncode == 0 and bool(plan.get("backup"))
+              and len(plan.get("projects") or []) == 1, proc.stderr.decode().strip()[:200])
+        (memory / "tabs.md").write_bytes(b"no frontmatter any more\n")
+        (memory / "invented.md").write_bytes(b"---\nname: x\ndescription: y\n---\n")
+        proc = run(["dream", "check", "--json", "--backup", plan.get("backup") or "none"])
+        rolled = (json.loads(proc.stdout.decode() or "{}").get("projects") or [{}])[0].get("rolled_back")
+        after = {p.name: p.read_bytes() for p in memory.iterdir()}
+        check("dream check rolls back a broken tidy", bool(rolled) and after == before)
+        (memory / "tabs.md").write_bytes(b"---\nname: tabs\ndescription: edited\n---\n")
+        run(["dream", "restore"])
+        check("dream restore puts memory back exactly",
+              {p.name: p.read_bytes() for p in memory.iterdir()} == before)
+
     failed = [name for name, ok, _ in checks if not ok]
     print("")
     print("%d/%d checks passed" % (len(checks) - len(failed), len(checks)))
@@ -2628,6 +2924,12 @@ def main(argv=None):
     p.add_argument("--answers", default="", help="write: the user's answers as a JSON object, or - for stdin")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("dream", help="tidy Claude's auto memory at done: plan (backup + facts), check, restore")
+    p.add_argument("action", choices=["plan", "check", "restore"])
+    p.add_argument("--backup", default="", help="check/restore: which backup (default: the latest)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_dream)
 
     p = sub.add_parser("connector", help="may Hestia use this connector? exit 0 yes, 10 ask once, 1 no")
     p.add_argument("name", help="connector key or MCP server name")

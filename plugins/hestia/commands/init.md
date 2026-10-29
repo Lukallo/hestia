@@ -45,10 +45,16 @@ can be skipped, and the first option is always the default. If `profile` or
 
 Keep the wording plain. This person may not be technical, so don't say "MCP" or "config".
 
-## 3. A second screen, only if needed
+## 3. A second screen: memory, plus anything else that applies
 
-At most two more questions, in **one** `AskUserQuestion` call. If neither
-applies, skip this step completely and say nothing about it.
+One more `AskUserQuestion` call, with up to three questions. The memory question is
+always there, and the other two only when they apply.
+
+**Memory** (header "Memory"), always: "Tidy Claude's memory when you clock out?"
+Options: "Yes, tidy it" (the default; description: "At /hestia:done, merge
+duplicate notes and drop ones today proved wrong. Backed up first, and it never
+adds anything") and "No, leave it". If `profile.dream` is already set, make that
+the first option, labelled "Keep: …". Save it as `"dream": true|false`.
 
 **A screen** (header "Screen"). Ask only when `has_screen` is false, or when
 `config.screen` is already `true` or `false`. Otherwise leave it out. Ask "Does
@@ -63,7 +69,7 @@ or email, because those are the ones Hestia has a use for. If there are none,
 leave this question out and say nothing about connectors. Never suggest
 installing one.
 
-Otherwise ask one multi-select question: "Hestia found these. Which may it
+The connectors question is one multi-select: "Hestia found these. Which may it
 use? It only acts when you run a Hestia command." Each option is the connector's
 name, with a description of what Hestia would do with it:
 - calendar: resume at your first meeting and keep lunch free
@@ -80,7 +86,7 @@ Build the answers as JSON and pass it on stdin. Leave out any field the user ski
 ```
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init write --seen "<servers>" --answers - <<'JSON'
 {"why": "...", "helps": "...", "tone": "plain|warm|detail",
- "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "screen": true,
+ "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "screen": true, "dream": true,
  "connectors": {"<connector key>": "allowed|declined"}}
 JSON
 ```
