@@ -8,6 +8,29 @@ Compression burnout: AI tools squeeze more work into the same hours. Agents keep
 release to keep up with, and the work gets so technical you lose touch with the *romantic* part: who it's
 for and why you started.
 
+### What burnout is, and which part each piece of hearth answers
+
+The WHO (ICD-11) describes burnout as the result of **chronic workplace stress that hasn't been successfully managed**. It's a work problem, not a medical diagnosis, and it has three parts: **exhaustion**, **cynicism** (pulling away from the work) and **feeling ineffective**. A hard day you sleep off is fatigue. Burnout is when recovery stops keeping up, for weeks or months.
+
+Two research models explain most of it:
+- **Demands vs. recovery:** effort is fine if you recover from it. Recovery needs breaks during the day and *detaching* in the evening: not doing work, and not thinking about it either.
+- **Six mismatches (Maslach):** burnout grows when the job is off on any of workload, control, reward, community, fairness or values. Workload is only one of the six.
+
+The root change with AI is that **starting and finishing a task became nearly free**. This is how that maps onto the causes, and which piece answers each one. The mapping is our reasoning, not settled research.
+
+| What AI compression does | Cause | Part of burnout | hearth piece |
+|---|---|---|---|
+| The waits disappear (builds, searches, first drafts), and so do the breaks they gave for free | Recovery | Exhaustion | "While you were away" in `status`: step away during a long run instead of watching it |
+| The day has no natural end: stopping becomes a choice against a next task that costs nothing | Recovery (detaching) | Exhaustion | `shutdown`, the pause, the finish point |
+| What's left is judgment, with constant switching between sessions | Workload | Exhaustion | `status`, morning recap |
+| New Claude Code features every week | Workload | Exhaustion | `digest`, one item only |
+| Being twice as fast becomes the new normal, and the gain is never cashed | Reward, fairness | Cynicism | Finish point and overnight fact make it visible. A tool can't fix this alone |
+| You ask Claude instead of a colleague | Community | Cynicism | Mostly not covered. `plain` makes it easy to send a person an update |
+| The craft part got automated; you review output you didn't make | Values | Cynicism, feeling ineffective | `plain`, "what today was for" |
+| The bar keeps moving, so you never feel done | Reward | Feeling ineffective | Finish point ("3 of 5 done") |
+
+What we can honestly claim tonight: not that burnout goes down, which takes weeks to show, but that the early signs change. Agents stop overnight, the day has an end, and nothing ran between shutdown and morning.
+
 ## Who it's for
 
 People who build with Claude Code every day, run several sessions or repos at once, and find it hard to stop.
@@ -45,6 +68,19 @@ pieces, and one of our own: **staying in touch with what the work is for**.
 | separate `morning` / `why` / `load` commands | n/a | Sprawl | **Cut** |
 | notifications, reminders, streaks, scores | n/a | Adds alerts and pressure, which breaks the one rule | **Never** |
 
+### Additions, through the same audit
+
+No new commands: each addition lives inside a piece above. Nothing above changes. Where an addition would change a decision above, it's marked **Proposed** and needs agreement first.
+
+| Piece | Plugs into | Helps | Could it hurt? | Decision |
+|---|---|---|---|---|
+| overnight fact: "Shut down 17:30, next agent activity 09:05, nothing ran overnight" | morning recap, `status` | Evidence for the time-back criterion, from logs we already read | Could turn into a score, so it's a plain fact: no totals, no comparisons, no streaks | **Keep**, fact only |
+| finish point | tomorrow's list (from `shutdown`), `status` | Gives the day an end without an alert. Shutdown answers *how* to stop; this answers *when* | Could feel like a quota, so it's only the list you wrote yourself, shown only when asked | **Merged** into shutdown + status |
+| "while you were away" | `status` | Step away during a long agent run and catch up in seconds, instead of watching it work | Could encourage running more agents at once, so it's only shown when asked and has no alerts | **Merged** into status |
+| save evening prompts | pause | A prompt typed while paused goes onto tomorrow's list instead of starting a conversation about work. Nothing is lost | Changes the "you can still type" decision above. Must always let `/hearth:` commands through | **Proposed**, needs agreement |
+| separate `catchup` / `park` / `break` / `overtime` / `week` commands | n/a | Already covered by `status`, the list and `resume` | Sprawl | **Cut** |
+| strip above the prompt box showing progress (a mod) | n/a | Always-visible progress | A permanent dashboard, which breaks the one rule | **Never** |
+
 ---
 
 ## How it's packaged: a Claude Code plugin in this repo, plus a CLI
@@ -71,6 +107,8 @@ Without Claude Code: `python plugins/hearth/scripts/hearth.py shutdown`.
 - **`hearth.py`** handles the facts: snapshots, pause state, log parsing, load numbers and changelog diffing. It's testable with nothing mocked.
 - **The command `.md` files** have Claude do the language: phrasing the list, `plain` and the digest pick. Each one calls `hearth.py` for real data first.
 
+> **Format note:** the current Claude Code docs call `commands/*.md` the older form and recommend `skills/<name>/SKILL.md` for new plugins. You still run them as `/hearth:shutdown`. If saving evening prompts is agreed, `hooks.json` also gets a `UserPromptSubmit` hook.
+
 ## Technical notes
 
 | Piece | Approach |
@@ -83,6 +121,10 @@ Without Claude Code: `python plugins/hearth/scripts/hearth.py shutdown`.
 | Python | A launcher that tries `python3` then `python` (Windows only has `python`) |
 | Digest | Claude Code `CHANGELOG.md` from GitHub, compared against `claude --version` and `~/.hearth/digest.json`; offline means "couldn't check, nothing to do" |
 | Config | Optional `~/.hearth/config.json`: resume hour, working days, extra repos |
+| Overnight fact | Pause start from `~/.hearth/pause.json`, then the first `tool_use` timestamp after it in `~/.claude/projects/*/*.jsonl` |
+| Finish point | `shutdown` writes the list as a `- [ ]` checklist. `status` gives Claude the list plus today's commits and prompts, and Claude says which items look done. The count is Claude's judgement and is labelled as such |
+| While you were away | Per session, since your last prompt: tool calls, files changed, and whether the last assistant message asks you something ("waiting on you") |
+| Save evening prompts (proposed) | `UserPromptSubmit` hook: if paused and the prompt doesn't start with `/hearth:`, append it to tomorrow's list and return `decision: "block"` with a reason shown to you. Exits immediately when there's no pause |
 
 ## Making it easy for a reviewer (human or AI) to verify
 
@@ -94,6 +136,7 @@ These are plain facts, not persuasion. Each one maps to a judging line:
 - **Tests + CI badge** on three operating systems.
 - **"What it touches and how to undo it"** and **"What it deliberately doesn't do"** (no alerts, no streaks), which speak directly to the time-back criterion.
 - **Honest limitations** (e.g. digest needs network; the pause only blocks agents started through Claude Code).
+- **The overnight fact in the sample output** ("nothing ran between 17:30 and 09:05"), the most direct evidence for the time-back criterion.
 
 ## Build order
 
@@ -103,3 +146,12 @@ These are plain facts, not persuasion. Each one maps to a judging line:
 4. Log parsing → shutdown list (with the "what today was for" line), load numbers, morning recap.
 5. `plain`, then `digest`.
 6. `selftest`, CI, README with real output.
+
+The additions slot into step 4, since the overnight fact, the finish point and "while you were away" all come from the same log parsing. Saving evening prompts, if agreed, goes with step 2.
+
+### Cut line for tonight
+
+If time runs short, stop wherever the clock says, in this order:
+- **Must:** steps 1–4 (skeleton, pause/resume, safe snapshot, shutdown list and morning recap), plus the overnight fact.
+- **Next:** `plain`, `selftest`, README with real output.
+- **Last:** `digest` (needs network, and it's the piece most likely to add reading), then CI on three operating systems.
