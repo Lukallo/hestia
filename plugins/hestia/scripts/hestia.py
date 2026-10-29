@@ -4,8 +4,11 @@
 Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 
     hestia.py done  [--note TEXT] [--until WHEN] [--json]   (alias: shutdown)
+    hestia.py break [45m | 1h30m | 13:50] [--json]          midday pause, lifts itself
     hestia.py back                                          (alias: resume)
     hestia.py today [--json]                                (alias: status)
+    hestia.py why   [--days N] [--repo PATH] [--json]       facts for "what was this for"
+    hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py selftest        # proves the whole flow on a throwaway repo
@@ -13,6 +16,7 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
 Environment overrides (used by the tests and selftest):
     HESTIA_HOME      state directory, default ~/.hestia
     HESTIA_LOG_DIR   Claude Code project logs, default ~/.claude/projects
+    HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
 """
 
 import argparse
@@ -23,12 +27,21 @@ import re
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BREAK_MINUTES = 20
 DEFAULT_RESUME_HOUR = 8
 DEFAULT_WORKING_DAYS = [0, 1, 2, 3, 4]  # Monday-Friday
+DEFAULT_BREAK_MINUTES = 45
+# A break longer than this is the end of the day, which is what `done` is for.
+MAX_BREAK_MINUTES = 4 * 60
+
+CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md"
+# `new` hands Claude a bounded slice of the changelog, never the whole history.
+NEW_MAX_RELEASES = 10
+NEW_MAX_CHANGES = 150
 
 # Bash commands matching this are always allowed while paused, otherwise the
 # pause would block the only command that lifts it.
@@ -133,6 +146,44 @@ def human(dt):
     return dt.strftime("%a %d %b %H:%M")
 
 
+def parse_break(value, now):
+    """How long a break lasts: `45m`, `1h`, `1h30m`, `90` (minutes) or `13:50`.
+
+    Returns the moment the break ends. Raises SystemExit with a plain reason
+    when the value can't be read, is not in the future, or is long enough to
+    be the end of the day instead.
+    """
+    text = (value or "").strip().lower().replace(" ", "")
+    if not text:
+        until = now + timedelta(minutes=DEFAULT_BREAK_MINUTES)
+    else:
+        clock = re.match(r"^(\d{1,2}):(\d{2})$", text)
+        span = re.match(r"^(?:(\d+)h)?(?:(\d+)(?:m|min|mins)?)?$", text)
+        if clock:
+            hour, minute = int(clock.group(1)), int(clock.group(2))
+            if hour > 23 or minute > 59:
+                raise SystemExit("could not read the break length %r" % value)
+            until = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if until <= now:
+                raise SystemExit("%s has already passed today" % until.strftime("%H:%M"))
+        elif span and (span.group(1) or span.group(2)):
+            minutes = int(span.group(1) or 0) * 60 + int(span.group(2) or 0)
+            until = now + timedelta(minutes=minutes)
+        else:
+            raise SystemExit(
+                "could not read the break length %r (use 45m, 1h30m, 90 or 13:50)" % value
+            )
+    minutes = (until - now).total_seconds() / 60.0
+    if minutes < 1:
+        raise SystemExit("a break needs to last at least a minute")
+    if minutes > MAX_BREAK_MINUTES:
+        raise SystemExit(
+            "that's longer than %d hours, so it's the end of the day: use done instead"
+            % (MAX_BREAK_MINUTES // 60)
+        )
+    return until
+
+
 # --------------------------------------------------------------------------
 # pause state
 # --------------------------------------------------------------------------
@@ -154,7 +205,16 @@ def read_pause(now=None):
         clear_pause()
         return None
     data["_until"] = until
+    # Pauses written before breaks existed have no kind; they were all `done`.
+    data["kind"] = data.get("kind") or "done"
     return data
+
+
+def pause_line(pause):
+    """The one sentence that says what kind of pause this is and when it ends."""
+    if pause.get("kind") == "break":
+        return "On a break until %s." % pause["_until"].strftime("%H:%M")
+    return "Clocked out until %s." % human(pause["_until"])
 
 
 def clear_pause():
@@ -612,6 +672,7 @@ def cmd_shutdown(args):
     write_json(
         pause_path(),
         {
+            "kind": "done",
             "until": until.isoformat(),
             "since": now.isoformat(),
             "note": args.note or "",
@@ -679,13 +740,117 @@ def cmd_shutdown(args):
 def cmd_resume(args):
     pause = read_pause()
     clear_pause()
+    since = (parse_ts(pause.get("since")) if pause else None) or datetime.now().astimezone()
+
+    if pause and pause.get("kind") == "break":
+        # The day isn't over, so the thing to hand back is where you were
+        # before the break, not yesterday's list.
+        print("Back on. On a break since %s." % since.strftime("%H:%M"))
+        for saved in pause.get("saved") or []:
+            print("Before the break: %s" % saved.get("restore", ""))
+        return 0
+
     if pause:
-        print("Back on. Paused since %s." % human(parse_ts(pause.get("since")) or datetime.now().astimezone()))
+        print("Back on. Paused since %s." % human(since))
     else:
         print("Not paused.")
     tomorrow = hestia_home() / "TOMORROW.md"
     if tomorrow.exists():
         print("Yesterday's list: %s" % tomorrow)
+    return 0
+
+
+def cmd_break(args):
+    """A midday pause: save where you are, pause agents, lift itself.
+
+    It reuses the same pause.json and the same hook as `done`, with
+    kind=break. It writes no list, because the day isn't over, and it leaves
+    the morning handover alone.
+    """
+    now = datetime.now().astimezone()
+    current = read_pause(now)
+    if current and current.get("kind") != "break":
+        # Never let a break shorten the night.
+        print("Already clocked out until %s. A break can't shorten the night." % human(current["_until"]))
+        return 0
+
+    until = parse_break(args.length, now)
+
+    cfg = load_config()
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    prompts = read_prompts(start_of_day)
+    repos = discover_repos(prompts, cfg)
+
+    stamp = now.strftime("%Y-%m-%d-%H%M%S")
+    message = "hestia break %s" % now.strftime("%Y-%m-%d %H:%M:%S")
+    snapshots = [
+        snapshot_repo(repo, "refs/hestia/%s" % stamp, message) for repo in repos
+    ]
+    saved = [s for s in snapshots if s["ref"]]
+
+    # Headless runs are paused by the hook at their next step, not killed:
+    # their work should still be there when you're back in an hour.
+    if args.stop_agents:
+        stopped, still_open = stop_agents(stop_all=False)
+    else:
+        stopped, still_open = [], running_agents()
+
+    write_json(
+        pause_path(),
+        {
+            "kind": "break",
+            "until": until.isoformat(),
+            "since": now.isoformat(),
+            "saved": [
+                {
+                    "repo": s["repo"],
+                    "ref": s["ref"],
+                    "restore": "git -C %s checkout %s -- ." % (s["repo"], s["ref"]),
+                }
+                for s in saved
+            ],
+        },
+    )
+
+    result = {
+        "kind": "break",
+        "until": until.isoformat(),
+        "until_human": until.strftime("%H:%M"),
+        "snapshots": [
+            {k: v for k, v in snap.items() if k != "error"} for snap in snapshots
+        ],
+        "saved": len(saved),
+        "agents_stopped": stopped,
+        "agents_still_open": still_open,
+        "errors": [s["error"] for s in snapshots if s["error"]],
+        "integrity_ok": all(s["untouched"] for s in snapshots),
+    }
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+
+    print("On a break until %s." % until.strftime("%H:%M"))
+    for snap in saved:
+        print(
+            "  saved %d file%s in %s -> %s"
+            % (
+                snap["dirty_files"],
+                "" if snap["dirty_files"] == 1 else "s",
+                Path(snap["repo"]).name,
+                snap["ref"],
+            )
+        )
+    if not saved:
+        print("  nothing uncommitted to save")
+    if stopped:
+        print("  stopped %d unattended agent%s" % (len(stopped), "" if len(stopped) == 1 else "s"))
+    if still_open:
+        print(
+            "  %d Claude session%s paused, they'll stop at their next step"
+            % (len(still_open), "" if len(still_open) == 1 else "s")
+        )
+    for error in result["errors"]:
+        print("  warning: %s" % error, file=sys.stderr)
     return 0
 
 
@@ -698,6 +863,7 @@ def cmd_status(args):
 
     result = {
         "paused": bool(pause),
+        "pause_kind": pause["kind"] if pause else None,
         "paused_until": pause["_until"].isoformat() if pause else None,
         "prompts_today": load["prompts"],
         "projects_today": len(load["projects"]),
@@ -710,7 +876,7 @@ def cmd_status(args):
         return 0
 
     if pause:
-        print("Clocked out until %s." % human(pause["_until"]))
+        print(pause_line(pause))
     else:
         print("Working.")
     if load["prompts"]:
@@ -756,9 +922,10 @@ def cmd_hook(args):
         if RESUME_PATTERN.search(command):
             return 0
 
-    reason = "Clocked out until %s. Run /hestia:back if tonight can't wait." % human(
-        pause["_until"]
-    )
+    if pause.get("kind") == "break":
+        reason = "%s Run /hestia:back to end it early." % pause_line(pause)
+    else:
+        reason = "%s Run /hestia:back if tonight can't wait." % pause_line(pause)
     print(
         json.dumps(
             {
@@ -811,6 +978,253 @@ def cmd_session_start(args):
         )
     )
     write_json(handover_path, {"for": stamp, "consumed": True, "at": datetime.now().astimezone().isoformat()})
+    return 0
+
+
+# --------------------------------------------------------------------------
+# why: the facts behind "who did this help, and what changed for them"
+# --------------------------------------------------------------------------
+
+def repo_commits(repo, since, limit=30):
+    """Commits on local branches since `since`, newest first.
+
+    Uses --branches rather than --all, so Hestia's own refs/hestia snapshots
+    are never mistaken for work. Filters to the repo's configured author when
+    there is one, so a busy shared repo doesn't put words in your mouth.
+    """
+    args = [
+        "log", "--branches", "--since=%s" % since.isoformat(),
+        "--format=%h%x09%s", "-n", str(limit),
+    ]
+    # The identity git would commit as right now, which honours both config
+    # and GIT_AUTHOR_EMAIL, unlike reading user.email alone.
+    ident = git(repo, ["var", "GIT_AUTHOR_IDENT"]).out
+    match = re.search(r"<([^>]+)>", ident)
+    email = match.group(1) if match else ""
+    if email:
+        args.append("--author=%s" % email)
+    result = git(repo, args)
+    commits = []
+    if result.ok:
+        for line in result.out.splitlines():
+            if "\t" in line:
+                sha, subject = line.split("\t", 1)
+                commits.append({"sha": sha, "subject": subject})
+    return commits
+
+
+def last_note():
+    """The note from the most recent `done`, if the list is still there."""
+    tomorrow = hestia_home() / "TOMORROW.md"
+    try:
+        for line in tomorrow.read_text().splitlines():
+            if line.startswith("> "):
+                return line[2:].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def gather_why(days=1, extra_repos=None):
+    now = datetime.now().astimezone()
+    since = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=max(days, 1) - 1)
+    prompts = read_prompts(since)
+    repos = discover_repos(prompts, load_config(), extra=extra_repos)
+    found = []
+    for repo in repos:
+        commits = repo_commits(repo, since)
+        status = git(repo, ["status", "--porcelain"]).out
+        uncommitted = len([line for line in status.splitlines() if line.strip()])
+        if not commits and not uncommitted:
+            continue
+        found.append(
+            {
+                "name": Path(repo).name,
+                "path": str(repo),
+                "branch": git(repo, ["rev-parse", "--abbrev-ref", "HEAD"]).out,
+                "commits": commits,
+                "uncommitted_files": uncommitted,
+            }
+        )
+    recent = []
+    for prompt in prompts[-15:]:
+        single = " ".join(prompt["text"].split())
+        recent.append(single if len(single) <= 200 else single[:197] + "...")
+    return {
+        "since": since.isoformat(),
+        "days": max(days, 1),
+        "note": last_note(),
+        "repos": found,
+        "prompt_count": len(prompts),
+        "recent_prompts": recent,
+    }
+
+
+def cmd_why(args):
+    facts = gather_why(args.days, args.repo)
+    if args.json:
+        print(json.dumps(facts, indent=2))
+        return 0
+    since = parse_ts(facts["since"])
+    print("What the work since %s touched:" % since.strftime("%a %d %b"))
+    if not facts["repos"] and not facts["prompt_count"]:
+        print("  nothing yet: no commits, no open changes, no prompts")
+        return 0
+    for repo in facts["repos"]:
+        print(
+            "  %s (%s): %d commit%s, %d file%s uncommitted"
+            % (
+                repo["name"], repo["branch"],
+                len(repo["commits"]), "" if len(repo["commits"]) == 1 else "s",
+                repo["uncommitted_files"], "" if repo["uncommitted_files"] == 1 else "s",
+            )
+        )
+        for commit in repo["commits"][:5]:
+            print("    %s %s" % (commit["sha"], commit["subject"]))
+    print("  %d prompt%s" % (facts["prompt_count"], "" if facts["prompt_count"] == 1 else "s"))
+    if facts["note"]:
+        print("  last shutdown note: %s" % facts["note"])
+    return 0
+
+
+# --------------------------------------------------------------------------
+# new: only what changed in Claude Code, so one thing can be picked from it
+# --------------------------------------------------------------------------
+
+VERSION_RE = re.compile(r"(\d+(?:\.\d+)+)")
+
+
+def version_key(text):
+    match = VERSION_RE.search(text or "")
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def installed_claude_version():
+    try:
+        proc = subprocess.run(
+            ["claude", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = VERSION_RE.search(proc.stdout.decode("utf-8", "replace"))
+    return match.group(1) if match else None
+
+
+def parse_changelog(text):
+    """[(version, [change, ...]), ...] in file order, newest first."""
+    releases = []
+    current = None
+    for line in text.splitlines():
+        heading = re.match(r"^##\s+v?(\d+(?:\.\d+)+)\b", line)
+        if heading:
+            current = (heading.group(1), [])
+            releases.append(current)
+            continue
+        if current is None:
+            continue
+        if line.startswith("- ") or line.startswith("* "):
+            current[1].append(line[2:].strip())
+        elif line.startswith("  ") and current[1] and line.strip():
+            current[1][-1] += " " + line.strip()
+    return releases
+
+
+def fetch_changelog(url):
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.read().decode("utf-8", "replace"), None
+    except Exception as error:  # offline, DNS, 404, bad URL: all mean "couldn't check"
+        return None, str(error) or error.__class__.__name__
+
+
+def gather_new(since=None):
+    url = os.environ.get("HESTIA_CHANGELOG_URL") or CHANGELOG_URL
+    installed = installed_claude_version()
+    digest_path = hestia_home() / "digest.json"
+    digest = read_json(digest_path) or {}
+
+    text, error = fetch_changelog(url)
+    if text is None:
+        return {"ok": False, "reason": error, "installed": installed}
+    releases = parse_changelog(text)
+    if not releases:
+        return {"ok": False, "reason": "the changelog had no releases in it", "installed": installed}
+
+    # "Since your version or the last check", whichever is later.
+    if since:
+        baseline = since
+    else:
+        known = [v for v in (installed, digest.get("seen")) if version_key(v)]
+        baseline = max(known, key=version_key) if known else None
+
+    if baseline is None:
+        newer = releases[:1]  # never checked and no claude on PATH: just the latest
+    else:
+        newer = [r for r in releases if version_key(r[0]) > version_key(baseline)]
+
+    shown, budget = [], NEW_MAX_CHANGES
+    for version, changes in newer[:NEW_MAX_RELEASES]:
+        if budget <= 0:
+            break
+        taken = changes[:budget]
+        budget -= len(taken)
+        shown.append(
+            {
+                "version": version,
+                "installed": bool(installed) and version_key(version) <= version_key(installed),
+                "total_changes": len(changes),
+                "changes": taken,
+            }
+        )
+
+    write_json(
+        digest_path,
+        {"seen": releases[0][0], "checked_at": datetime.now().astimezone().isoformat()},
+    )
+    return {
+        "ok": True,
+        "installed": installed,
+        "since": baseline,
+        "latest": releases[0][0],
+        "releases": shown,
+        "left_out": len(newer) - len(shown),
+    }
+
+
+def cmd_new(args):
+    facts = gather_new(args.since)
+    if args.json:
+        print(json.dumps(facts, indent=2))
+        return 0
+    if not facts["ok"]:
+        print("Couldn't check the Claude Code changelog, so there's nothing to do.")
+        return 0
+    if not facts["releases"]:
+        print("Nothing new since %s." % facts["since"])
+        return 0
+    print(
+        "%d release%s since %s (you have %s):"
+        % (
+            len(facts["releases"]),
+            "" if len(facts["releases"]) == 1 else "s",
+            facts["since"] or "your last check",
+            facts["installed"] or "no claude on PATH",
+        )
+    )
+    for release in facts["releases"]:
+        print(
+            "  %s  %d change%s%s"
+            % (
+                release["version"],
+                release["total_changes"],
+                "" if release["total_changes"] == 1 else "s",
+                "" if release["installed"] else ", not installed yet",
+            )
+        )
+    if facts["left_out"]:
+        print("  %d older release%s left out" % (facts["left_out"], "" if facts["left_out"] == 1 else "s"))
     return 0
 
 
@@ -961,6 +1375,50 @@ def cmd_selftest(args):
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("expired pause clears itself", decision == "allow")
 
+        # A midday break: the same pause, kind=break, no list, lifts itself.
+        list_before = (home / "TOMORROW.md").read_bytes()
+        handover_before = (home / "handover.json").read_bytes()
+        proc = run(["break", "30m", "--json"])
+        ok = proc.returncode == 0
+        check("break runs", ok, proc.stderr.decode().strip()[:200])
+        if ok:
+            result = json.loads(proc.stdout.decode())
+            check("break saves where you are", result["saved"] == 1 and result["integrity_ok"])
+        proc = subprocess.run(
+            [sys.executable, str(script), "hook"],
+            input=json.dumps({"tool_name": "Edit", "tool_input": {}}).encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        check("hook pauses agents during a break", "On a break until" in proc.stdout.decode())
+        check("break writes no list",
+              (home / "TOMORROW.md").read_bytes() == list_before
+              and (home / "handover.json").read_bytes() == handover_before)
+        back = run(["back"]).stdout.decode()
+        check("back ends a break early", "On a break since" in back and "Before the break" in back)
+        write_target.write_text(json.dumps({"kind": "break", "until": past}))
+        decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
+        check("break lifts itself", decision == "allow")
+
+        # why: the facts come from real commits, never from Hestia's own snapshots.
+        proc = run(["why", "--json"])
+        facts = json.loads(proc.stdout.decode()) if proc.returncode == 0 else {}
+        subjects = [c["subject"] for r in facts.get("repos", []) for c in r["commits"]]
+        check("why reads today's commits", subjects == ["first"])
+
+        # new: offline-safe, reads a local changelog, shows only what changed.
+        changelog = tmp / "CHANGELOG.md"
+        changelog.write_text("# Changelog\n\n## 9.2.0\n\n- b\n\n## 9.1.0\n\n- a\n\n## 9.0.0\n\n- old\n")
+        env["HESTIA_CHANGELOG_URL"] = changelog.resolve().as_uri()
+        facts = json.loads(run(["new", "--since", "9.0.0", "--json"]).stdout.decode())
+        check("new shows only what changed",
+              [r["version"] for r in facts.get("releases", [])] == ["9.2.0", "9.1.0"])
+        facts = json.loads(run(["new", "--since", "9.2.0", "--json"]).stdout.decode())
+        check("new is quiet when nothing changed", facts.get("ok") and facts.get("releases") == [])
+        env["HESTIA_CHANGELOG_URL"] = (tmp / "missing.md").resolve().as_uri()
+        proc = run(["new"])
+        check("new degrades cleanly offline",
+              proc.returncode == 0 and "nothing to do" in proc.stdout.decode())
+
     failed = [name for name, ok, _ in checks if not ok]
     print("")
     print("%d/%d checks passed" % (len(checks) - len(failed), len(checks)))
@@ -982,12 +1440,29 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_shutdown)
 
-    p = sub.add_parser("back", aliases=["resume"], help="lift the pause early")
+    p = sub.add_parser("break", help="midday pause: save where you are, pause agents, lift itself")
+    p.add_argument("length", nargs="?", default="", help="45m, 1h30m, 90 or 13:50 (default 45m)")
+    p.add_argument("--stop-agents", action="store_true", help="also SIGTERM unattended agents")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_break)
+
+    p = sub.add_parser("back", aliases=["resume"], help="lift the pause or break early")
     p.set_defaults(func=cmd_resume)
 
     p = sub.add_parser("today", aliases=["status"], help="show the pause and today's load")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("why", help="the facts behind what today's work was for")
+    p.add_argument("--days", type=int, default=1, help="look back this many days (default: today)")
+    p.add_argument("--repo", action="append", default=[], help="also include this repo")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_why)
+
+    p = sub.add_parser("new", help="what changed in Claude Code since your version or last check")
+    p.add_argument("--since", default="", help="compare against this version instead")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_new)
 
     p = sub.add_parser("hook", help="PreToolUse hook (reads JSON on stdin)")
     p.set_defaults(func=cmd_hook)
