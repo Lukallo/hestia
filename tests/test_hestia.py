@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -89,6 +90,40 @@ class TestResumeTime(TempHome):
         until = hestia.parse_until("06:30", now, {})
         self.assertEqual((until.hour, until.minute), (6, 30))
         self.assertGreater(until, now, "a time already past means tomorrow")
+
+    def test_after_midnight_this_morning_counts(self):
+        cfg = {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]}
+        tuesday = datetime(2026, 10, 27, 1, 0).astimezone()
+        resume = hestia.next_resume(tuesday, cfg)
+        self.assertEqual(resume.date(), tuesday.date(), "should not skip Tuesday")
+        self.assertEqual(resume.hour, 8)
+        saturday = datetime(2026, 10, 31, 1, 0).astimezone()
+        self.assertEqual(hestia.next_resume(saturday, cfg).weekday(), 0, "still waits for Monday")
+
+    def test_until_refuses_an_impossible_time(self):
+        now = datetime(2026, 10, 27, 22, 0).astimezone()
+        for value in ("25:00", "12:60"):
+            with self.assertRaises(SystemExit):
+                hestia.parse_until(value, now, {})
+
+    def test_a_clock_change_does_not_shift_the_morning(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("time.tzset is POSIX only")
+        os.environ["TZ"] = "Europe/Dublin"  # tearDown restores the environment
+        time.tzset()
+        self.addCleanup(time.tzset)
+        before = datetime(2026, 10, 23, 12, 0).astimezone().utcoffset()
+        after = datetime(2026, 10, 26, 12, 0).astimezone().utcoffset()
+        if before == after:
+            self.skipTest("no zone data for Europe/Dublin")
+        cfg = {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]}
+        # Clocks go back on Sunday 25 Oct 2026, between Friday and Monday.
+        friday = datetime(2026, 10, 23, 19, 0).astimezone()
+        resume = hestia.next_resume(friday, cfg).astimezone()
+        self.assertEqual((resume.weekday(), resume.hour), (0, 8))
+        saturday = datetime(2026, 10, 24, 23, 0).astimezone()
+        until = hestia.parse_until("08:00", saturday, cfg).astimezone()
+        self.assertEqual((until.day, until.hour), (25, 8))
 
 
 class TestPromptParsing(TempHome):

@@ -137,18 +137,30 @@ def parse_ts(value):
     return dt.astimezone()
 
 
+def local_time(day, hour, minute=0):
+    """`day` at hour:minute on the local clock, with that day's UTC offset.
+
+    `now.replace(hour=...)` keeps today's offset, so a pause that crosses a
+    clock change would lift an hour early or late.
+    """
+    return datetime(day.year, day.month, day.day, hour, minute).astimezone()
+
+
 def next_resume(now, cfg):
-    """The next working morning at the configured hour."""
+    """The next working morning at the configured hour.
+
+    Before that hour, as with a `done` after midnight, this morning counts.
+    """
     hour = int(cfg.get("resume_hour", DEFAULT_RESUME_HOUR))
     days = cfg.get("working_days") or DEFAULT_WORKING_DAYS
-    candidate = (now + timedelta(days=1)).replace(
-        hour=hour, minute=0, second=0, microsecond=0
-    )
-    for _ in range(8):
-        if candidate.weekday() in days:
-            return candidate
-        candidate += timedelta(days=1)
-    return candidate
+    day = now.date()
+    if local_time(day, hour) <= now:
+        day += timedelta(days=1)
+    for _ in range(7):
+        if day.weekday() in days:
+            break
+        day += timedelta(days=1)
+    return local_time(day, hour)
 
 
 def parse_until(value, now, cfg):
@@ -158,16 +170,16 @@ def parse_until(value, now, cfg):
     match = re.match(r"^(\d{1,2}):(\d{2})$", text)
     if match:
         hour, minute = int(match.group(1)), int(match.group(2))
-        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if hour > 23 or minute > 59:
+            raise SystemExit("could not read --until %r (use HH:MM or an ISO timestamp)" % value)
+        candidate = local_time(now.date(), hour, minute)
         if candidate <= now:
-            candidate += timedelta(days=1)
+            candidate = local_time(now.date() + timedelta(days=1), hour, minute)
         return candidate
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         raise SystemExit("could not read --until %r (use HH:MM or an ISO timestamp)" % value)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=now.tzinfo)
     return dt.astimezone()
 
 
@@ -2765,6 +2777,12 @@ def cmd_selftest(args):
         write_target.write_text(json.dumps({"until": past}))
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("expired pause clears itself", decision == "allow")
+
+        # Stopping after midnight still lets you back in this morning.
+        tuesday = datetime(2026, 10, 27, 1, 0).astimezone()
+        resume = next_resume(tuesday, {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]})
+        check("done after midnight resumes this morning",
+              (resume.date(), resume.hour) == (tuesday.date(), 8))
 
         # A midday break: the same pause, kind=break, no list, lifts itself.
         list_before = (home / "TOMORROW.md").read_bytes()
