@@ -30,7 +30,15 @@ In Claude Code:
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`. No other dependencies: the engine is standard library only. At the end of the day, type:
+Needs `git` and `python3`. No other dependencies: the engine is standard library only.
+
+Once, to set up (about a minute; every question is skippable and has a default):
+
+```text
+/hestia:init
+```
+
+At the end of the day, type:
 
 ```text
 /hestia:done
@@ -43,7 +51,12 @@ That's it. You get:
 ├── TOMORROW.md     tomorrow's list: your note, where you left off, the exact restore line
 ├── pause.json      when the pause lifts (gone after /hestia:back)
 ├── handover.json   makes sure the morning handover happens only once
-└── config.json     optional, only if you create it
+├── profile.json    your answers from /hestia:init
+├── connectors.json which connectors Hestia may use, asked once each
+└── config.json     your working days and resume hour
+
+~/.claude/CLAUDE.md
+└── a short "Hestia: about me" section, between its own markers
 
 <each repo you touched today>
 └── refs/hestia/<timestamp>   a snapshot of your uncommitted work
@@ -75,10 +88,11 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Three commands, two hooks, nothing else
+## Four commands, two hooks, nothing else
 
 | | Command | What happens |
 |---|---|---|
+| <img src="assets/icons/tend.svg" width="40" alt="Tend: lighting the fire for the first time"> | `/hestia:init` | Once. Finds what's already set up (your name, usual hours, connectors), then asks four skippable questions: your day, why you build, who it helps, how to talk to you. Saves a short section to `~/.claude/CLAUDE.md` so every session explains changes by what they do for people first |
 | <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
 | <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts the pause early, and reminds you of the one thing you were mid-way through |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused, and today's load, only ever when you ask |
@@ -198,13 +212,16 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Pause state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
-| Config | `~/.hestia/config.json` (optional) | delete it |
+| Config | `~/.hestia/config.json` | delete it |
+| Your answers | `~/.hestia/profile.json` | delete it |
+| Connector choices | `~/.hestia/connectors.json` | delete it, or re-run `/hestia:init` to change a choice |
+| About-me section | `~/.claude/CLAUDE.md`, between `<!-- hestia:start -->` and `<!-- hestia:end -->` | `/hestia:init remove` puts the file back byte for byte (a backup is kept in `~/.hestia/backups/`) |
 
-It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything.
+It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything. It only touches `CLAUDE.md` inside its own markers, and only when you run `/hestia:init`.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 19 checks, 22 tests
+## Prove it: 22 checks, 37 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -234,20 +251,23 @@ PASS handover carries the note
 PASS handover happens only once
 PASS hook is silent after back
 PASS expired pause clears itself
+PASS init writes profile, config and connectors
+PASS init keeps CLAUDE.md outside its markers
+PASS init remove restores CLAUDE.md exactly
 
-19/19 checks passed
+22/22 checks passed
 ```
 
 The selftest runs with `--keep-agents`, so it never touches real processes.
 
-The 22 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 37 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 22 tests in 3.153s
+Ran 37 tests in 8.336s
 
 OK
 ```
