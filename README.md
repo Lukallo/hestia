@@ -55,7 +55,7 @@ git clone https://github.com/Lukallo/hestia && cd hestia
 python3 plugins/hestia/scripts/hestia.py selftest
 ```
 
-It builds a throwaway repo in a temp folder, runs the whole flow and ends with `48/48 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
+It builds a throwaway repo in a temp folder, runs the whole flow and ends with `51/51 checks passed`. It never touches your real `~/.hestia` and never pauses your sessions.
 
 That's it. You get:
 
@@ -94,7 +94,7 @@ claude plugin uninstall hestia@hestia
 claude plugin marketplace remove hestia
 ```
 
-If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them, see [What it touches](#what-it-touches-and-how-to-undo-it).
+If you ran `/hestia:init`, run `/hestia:init remove` first. It puts `~/.claude/CLAUDE.md` back byte for byte. Then delete `~/.hestia` to forget everything else. Snapshots stay in your repos until you delete them. To delete every one in a repo, run this in it: `git for-each-ref --format='delete %(refname)' refs/hestia | git update-ref --stdin`. See [What it touches](#what-it-touches-and-how-to-undo-it).
 
 </details>
 
@@ -350,7 +350,7 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 
 | Thing | Where | Undo |
 |---|---|---|
-| Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
+| Snapshots | `refs/hestia/*` in each repo. `done` deletes those older than `keep_snapshots_days` (30) | `git update-ref -d refs/hestia/<ts>` |
 | Pause or break state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
 | Handover state | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` hands the list over once more |
@@ -365,7 +365,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 48 checks, 118 tests
+## Prove it: 51 checks, 140 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -383,7 +383,9 @@ PASS branch unchanged
 PASS working tree unchanged
 PASS index byte-identical
 PASS uncommitted file is recoverable
+PASS snapshot skips large untracked files
 PASS tomorrow's list written
+PASS done prunes snapshots older than the limit
 PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
@@ -405,6 +407,7 @@ PASS back runs
 PASS old names still work as aliases
 PASS hook is silent after back
 PASS expired pause clears itself
+PASS done after midnight resumes this morning
 PASS break runs
 PASS break saves where you are
 PASS hook pauses agents during a break
@@ -425,24 +428,24 @@ PASS dream plan backs up today's memory
 PASS dream check rolls back a broken tidy
 PASS dream restore puts memory back exactly
 
-48/48 checks passed
+51/51 checks passed
 ```
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 118 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
+The 140 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 118 tests in 19.181s
+Ran 140 tests in 56.342s
 
-OK
+OK (skipped=7)
 ```
 
-That run was on macOS. On Windows the launcher tests skip, because they need a POSIX `sh` with symlinks. CI runs them on Linux and macOS.
+That run was on Windows, where 7 tests skip: 4 launcher tests need a POSIX `sh` with symlinks, 2 use a shell-script stand-in browser, and 1 needs `time.tzset`, which is POSIX only. CI runs them on Linux and macOS.
 
 `tests/test_platforms.py` covers what differs between Linux, macOS and Windows: notes, prompts and paths in any language, folders with spaces, the restore line pasted into each shell on the machine, and every hook run the way Claude Code runs it. Where it can, it also recreates Windows' text encodings, so a regression shows up on any machine.
 
@@ -520,6 +523,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - A mod, which is a plugin with a JavaScript hooks module, can approve a tool call that the pause blocked, unless you use managed settings or a Team or Enterprise login. Ordinary plugins' hooks can't, because Claude Code ranks a deny above any allow.
 - The live check in `tests/compat/` runs in Claude Code's default permission mode. It hasn't been run in `bypassPermissions` or auto mode.
 - A break pauses headless runs at their next tool call instead of stopping them. A run that is between tool calls when the break starts will finish its current model turn first.
+- Untracked files over `snapshot_max_mb` (50 MB by default) are not saved. `TOMORROW.md` names them under the repo, but the snapshot can't restore them. The limit is per file, so many small new files can still add up.
 - A break can't be taken while clocked out for the night. It refuses rather than shortening the overnight pause. Breaks longer than four hours are refused too: that's the end of the day, which is what `/hestia:done` is for.
 - `/hestia:why` only knows what's in your commits, open changes, today's prompts and your last shutdown note. It reports your own commits only, matched on the identity git would commit as.
 - `/hestia:dashboard` still shows in the command menu on a computer with no screen. There it answers in two lines and writes nothing. If you skipped the screen question, Hestia guesses from the display and SSH settings: it writes the page, and only opens a browser when it finds a display.
@@ -568,7 +572,11 @@ Optional, at `~/.hestia/config.json`:
 }
 ```
 
-`working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning.
+`working_days` is Monday = 0. Shutting down on a Friday evening resumes Monday morning. Shutting down after midnight but before `resume_hour` resumes that same morning. The resume time follows your local clock, so a clock change in between doesn't move it.
+
+`keep_snapshots_days` is how many days `done` keeps a snapshot before it deletes it. The default is 30. Set it to 0 to keep every snapshot. Only refs under `refs/hestia/` with a date in their name are deleted, and a break never deletes any.
+
+`snapshot_max_mb`: untracked files bigger than this many MB are left out of snapshots, so each `done` and `break` doesn't copy them into `.git/objects`. The default is 50. Set it to 0 to save everything. Tracked files are always saved, whatever their size.
 
 `screen` is your answer from `/hestia:init`. `false` turns `/hestia:dashboard` off. Leave it out and the page only opens in a browser when Hestia finds a display.
 

@@ -104,7 +104,7 @@ Everything lives in `~/.hestia/`, or in `$HESTIA_HOME` when that is set.
 | `digest.json` | `{seen: <newest version>, checked_at}` | Written only after a successful changelog fetch |
 | `dashboard.html` | A static page, rewritten on each `dashboard` run | Delete it any time |
 | `profile.json`, `connectors.json` | The answers and connector consent from `init` | Rewritten by `init`; `init remove` takes the CLAUDE.md section out |
-| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen}`. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
+| `config.json` | `{resume_hour, working_days (Mon=0), repos, screen, keep_snapshots_days, snapshot_max_mb}`. `keep_snapshots_days` is how many days `done` keeps a snapshot ref: 30 by default, and 0 or less keeps them all. `snapshot_max_mb` is the size above which untracked files stay out of snapshots: 50 by default, and 0 or less for no limit. `screen` is whether this computer has a display (`true`, `false` or absent). It has nothing to do with headless agents or sessions | Optional. `init` writes `resume_hour`, `working_days` and `screen`; only the user sets `repos` |
 
 Snapshots live in each repo as `refs/hestia/<YYYY-MM-DD-HHMMSS>`. They are
 plain commits whose parent is `HEAD`. They are never on a branch.

@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -90,6 +91,40 @@ class TestResumeTime(TempHome):
         until = hestia.parse_until("06:30", now, {})
         self.assertEqual((until.hour, until.minute), (6, 30))
         self.assertGreater(until, now, "a time already past means tomorrow")
+
+    def test_after_midnight_this_morning_counts(self):
+        cfg = {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]}
+        tuesday = datetime(2026, 10, 27, 1, 0).astimezone()
+        resume = hestia.next_resume(tuesday, cfg)
+        self.assertEqual(resume.date(), tuesday.date(), "should not skip Tuesday")
+        self.assertEqual(resume.hour, 8)
+        saturday = datetime(2026, 10, 31, 1, 0).astimezone()
+        self.assertEqual(hestia.next_resume(saturday, cfg).weekday(), 0, "still waits for Monday")
+
+    def test_until_refuses_an_impossible_time(self):
+        now = datetime(2026, 10, 27, 22, 0).astimezone()
+        for value in ("25:00", "12:60"):
+            with self.assertRaises(SystemExit):
+                hestia.parse_until(value, now, {})
+
+    def test_a_clock_change_does_not_shift_the_morning(self):
+        if not hasattr(time, "tzset"):
+            self.skipTest("time.tzset is POSIX only")
+        os.environ["TZ"] = "Europe/Dublin"  # tearDown restores the environment
+        time.tzset()
+        self.addCleanup(time.tzset)
+        before = datetime(2026, 10, 23, 12, 0).astimezone().utcoffset()
+        after = datetime(2026, 10, 26, 12, 0).astimezone().utcoffset()
+        if before == after:
+            self.skipTest("no zone data for Europe/Dublin")
+        cfg = {"resume_hour": 8, "working_days": [0, 1, 2, 3, 4]}
+        # Clocks go back on Sunday 25 Oct 2026, between Friday and Monday.
+        friday = datetime(2026, 10, 23, 19, 0).astimezone()
+        resume = hestia.next_resume(friday, cfg).astimezone()
+        self.assertEqual((resume.weekday(), resume.hour), (0, 8))
+        saturday = datetime(2026, 10, 24, 23, 0).astimezone()
+        until = hestia.parse_until("08:00", saturday, cfg).astimezone()
+        self.assertEqual((until.day, until.hour), (25, 8))
 
 
 class TestPromptParsing(TempHome):
@@ -176,6 +211,237 @@ class TestSnapshot(TempHome):
         self.assertTrue(info["clean"])
         self.assertIsNone(info["ref"])
         self.assertFalse(hestia.git(repo, ["rev-parse", "refs/hestia/test"]).ok)
+
+
+class TestSnapshotSizeLimit(TempHome):
+    """Big untracked files stay out of snapshots and out of .git/objects."""
+
+    LIMIT_MB = 0.01  # about 10 KB, so the tests stay fast
+    BIG = 20000
+    SMALL = 100
+
+    def write(self, repo, name, size):
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Random bytes, so no two files share a blob by accident.
+        path.write_bytes(os.urandom(size))
+        return path
+
+    def blob(self, repo, name):
+        # Without -w, hash-object only names the blob. It never stores it.
+        return hestia.git(repo, ["hash-object", "--", name]).out
+
+    def stored(self, repo, sha):
+        return hestia.git(repo, ["cat-file", "-e", sha]).ok
+
+    def in_snapshot(self, repo, ref, name):
+        return hestia.git(repo, ["cat-file", "-e", "%s:%s" % (ref, name)]).ok
+
+    def commit_all(self, repo, message):
+        identity = ["-c", "user.name=test", "-c", "user.email=test@hestia.local"]
+        hestia.git(repo, ["add", "-A"])
+        hestia.git(repo, identity + ["commit", "-q", "-m", message])
+
+    def state(self, repo):
+        return (
+            hestia.git(repo, ["rev-parse", "HEAD"]).out,
+            hestia.git(repo, ["status", "--porcelain"]).out,
+            hestia.index_fingerprint(repo),
+        )
+
+    def test_big_untracked_file_is_left_out_and_never_stored(self):
+        repo = self.make_repo()
+        (repo / "a.txt").write_text("one, edited\n")
+        big = self.write(repo, "big.bin", self.BIG)
+        self.write(repo, "small.txt", self.SMALL)
+        content = big.read_bytes()
+        sha = self.blob(repo, "big.bin")
+        before = self.state(repo)
+
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+
+        self.assertIsNone(info["error"])
+        self.assertEqual(info["skipped"], ["big.bin"])
+        self.assertEqual(info["max_mb"], self.LIMIT_MB)
+        self.assertEqual(info["dirty_files"], 2)  # a.txt and small.txt
+        self.assertFalse(self.stored(repo, sha), "the big file must never be hashed into the repo")
+        self.assertFalse(self.in_snapshot(repo, "refs/hestia/t", "big.bin"))
+        self.assertTrue(self.in_snapshot(repo, "refs/hestia/t", "small.txt"))
+        shown = hestia.git(repo, ["show", "refs/hestia/t:a.txt"]).out
+        self.assertEqual(shown, "one, edited")
+        # The repo itself is exactly as it was, big file included.
+        self.assertTrue(info["untouched"])
+        self.assertEqual(self.state(repo), before)
+        self.assertEqual(big.read_bytes(), content)
+
+    def test_big_tracked_file_is_always_saved(self):
+        repo = self.make_repo()
+        self.write(repo, "model.bin", self.BIG)
+        self.commit_all(repo, "add the model")
+        self.write(repo, "model.bin", self.BIG)  # new content, never stored
+        sha = self.blob(repo, "model.bin")
+        self.assertFalse(self.stored(repo, sha))
+
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+
+        self.assertEqual(info["skipped"], [])
+        self.assertEqual(info["dirty_files"], 1)
+        self.assertTrue(self.stored(repo, sha))
+        self.assertEqual(hestia.git(repo, ["rev-parse", "refs/hestia/t:model.bin"]).out, sha)
+
+    def test_no_limit_saves_everything(self):
+        for limit in (0, -1, None):
+            repo = self.make_repo("repo-%s" % limit)
+            self.write(repo, "big.bin", self.BIG)
+            sha = self.blob(repo, "big.bin")
+            info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=limit)
+            self.assertEqual(info["skipped"], [], limit)
+            self.assertIsNone(info["max_mb"], limit)
+            self.assertTrue(self.stored(repo, sha), limit)
+            self.assertTrue(self.in_snapshot(repo, "refs/hestia/t", "big.bin"), limit)
+
+    def test_names_with_spaces_globs_and_a_leading_colon(self):
+        repo = self.make_repo()
+        # Each small file matches the big name next to it when that name is
+        # read as a glob or as pathspec magic, so a pathspec that wasn't
+        # literal would leave the small one out too.
+        pairs = [
+            ("big file.bin", "big.bin"),
+            ("[ab].bin", "a.bin"),
+            ("sub dir/big one.bin", "sub dir/ok.txt"),
+        ]
+        if os.name != "nt":  # Windows can't name a file with * ? or :
+            pairs += [("g*.bin", "gX.bin"), ("x?.bin", "xy.bin"), (":lead.bin", "lead.bin")]
+        big = [b for b, _ in pairs]
+        small = [s for _, s in pairs]
+        for name in big:
+            self.write(repo, name, self.BIG)
+        for name in small:
+            self.write(repo, name, self.SMALL)
+        blobs = {name: self.blob(repo, name) for name in big}
+        before = self.state(repo)
+
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+
+        self.assertIsNone(info["error"])
+        self.assertEqual(sorted(info["skipped"]), sorted(big))
+        for name in big:
+            self.assertFalse(self.stored(repo, blobs[name]), name)
+            self.assertFalse(self.in_snapshot(repo, "refs/hestia/t", name), name)
+        for name in small:
+            self.assertTrue(self.in_snapshot(repo, "refs/hestia/t", name), name)
+        self.assertTrue(info["untouched"])
+        self.assertEqual(self.state(repo), before)
+
+    def test_users_pathspec_settings_dont_break_it(self):
+        os.environ["GIT_LITERAL_PATHSPECS"] = "1"  # restored by tearDown
+        repo = self.make_repo()
+        self.write(repo, "big.bin", self.BIG)
+        self.write(repo, "small.txt", self.SMALL)
+        sha = self.blob(repo, "big.bin")
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+        self.assertIsNone(info["error"])
+        self.assertEqual(info["skipped"], ["big.bin"])
+        self.assertFalse(self.stored(repo, sha))
+        self.assertTrue(self.in_snapshot(repo, "refs/hestia/t", "small.txt"))
+
+    def test_a_new_folder_counts_only_for_what_was_saved(self):
+        repo = self.make_repo()
+        self.write(repo, "data/big.bin", self.BIG)
+        self.write(repo, "data/notes.txt", self.SMALL)
+        self.write(repo, "dumps/one.bin", self.BIG)
+        self.write(repo, "dumps/two.bin", self.BIG)
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+        # git status shows data/ and dumps/ as one entry each. Only data/
+        # still has something saved in it.
+        self.assertEqual(info["dirty_files"], 1)
+        self.assertEqual(info["skipped"], ["data/big.bin", "dumps/one.bin", "dumps/two.bin"])
+
+    def test_only_big_files_dirty_still_makes_a_ref_with_heads_tree(self):
+        repo = self.make_repo()
+        self.write(repo, "big.bin", self.BIG)
+        sha = self.blob(repo, "big.bin")
+        info = hestia.snapshot_repo(repo, "refs/hestia/t", "t", max_mb=self.LIMIT_MB)
+        self.assertIsNone(info["error"])
+        self.assertFalse(info["clean"])
+        self.assertEqual(info["ref"], "refs/hestia/t")
+        self.assertEqual(info["dirty_files"], 0)
+        self.assertEqual(info["skipped"], ["big.bin"])
+        self.assertEqual(
+            hestia.git(repo, ["rev-parse", "refs/hestia/t^{tree}"]).out,
+            hestia.git(repo, ["rev-parse", "HEAD^{tree}"]).out,
+        )
+        self.assertFalse(self.stored(repo, sha))
+
+    def test_config_default_and_values(self):
+        self.assertEqual(hestia.load_config()["snapshot_max_mb"], 50)
+        self.assertEqual(hestia.snapshot_limit_mb(50), 50.0)
+        self.assertEqual(hestia.snapshot_limit_mb("2.5"), 2.5)
+        self.assertIsNone(hestia.snapshot_limit_mb(0))
+        self.assertIsNone(hestia.snapshot_limit_mb(-3))
+        self.assertIsNone(hestia.snapshot_limit_mb(None))
+        # A value that can't be read falls back to the default, not to no limit.
+        self.assertEqual(hestia.snapshot_limit_mb("lots"), 50.0)
+
+    def run_cli(self, repo, *args):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py")] + list(args),
+            cwd=str(repo), env=dict(os.environ),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def test_done_names_the_skipped_file_in_tomorrows_list(self):
+        repo = self.make_repo()
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"snapshot_max_mb": self.LIMIT_MB}))
+        (repo / "a.txt").write_text("one, edited\n")
+        self.write(repo, "big.bin", self.BIG)
+        sha = self.blob(repo, "big.bin")
+        before = self.state(repo)
+
+        # --keep-agents: a test must never signal real processes.
+        proc = self.run_cli(repo, "done", "--keep-agents", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        result = json.loads(proc.stdout.decode())
+
+        snap = result["snapshots"][0]
+        self.assertEqual(snap["skipped"], ["big.bin"])
+        self.assertEqual(snap["dirty_files"], 1)
+        self.assertTrue(result["integrity_ok"])
+        self.assertEqual(self.state(repo), before)
+        self.assertFalse(self.stored(repo, sha))
+        text = (self.home / "TOMORROW.md").read_text(encoding="utf-8")
+        self.assertIn("1 file saved", text)
+        self.assertIn("  not saved (over 0.01 MB): big.bin", text)
+
+    def test_tomorrow_has_no_not_saved_line_when_nothing_was_skipped(self):
+        repo = self.make_repo()
+        (repo / "a.txt").write_text("one, edited\n")
+        proc = self.run_cli(repo, "done", "--keep-agents", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        self.assertEqual(json.loads(proc.stdout.decode())["snapshots"][0]["skipped"], [])
+        self.assertNotIn("not saved", (self.home / "TOMORROW.md").read_text(encoding="utf-8"))
+
+    def test_break_skips_it_too_and_says_no_more_than_before(self):
+        repo = self.make_repo()
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "config.json").write_text(json.dumps({"snapshot_max_mb": self.LIMIT_MB}))
+        (repo / "a.txt").write_text("one, edited\n")
+        self.write(repo, "big.bin", self.BIG)
+        sha = self.blob(repo, "big.bin")
+
+        # break never signals anything without --stop-agents, which a test never passes.
+        proc = self.run_cli(repo, "break", "30m", "--json")
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        self.assertEqual(json.loads(proc.stdout.decode())["snapshots"][0]["skipped"], ["big.bin"])
+        self.assertFalse(self.stored(repo, sha))
+        hestia.clear_pause()
+
+        proc = self.run_cli(repo, "break", "30m")
+        out = proc.stdout.decode()
+        self.assertNotIn("big.bin", out)
+        self.assertIn("saved 1 file in", out)
+        hestia.clear_pause()
 
 
 class TestPauseAndHook(TempHome):
@@ -539,6 +805,141 @@ class TestShutdownEndToEnd(TempHome):
         self.assertIn("keeping the lights on", text)
         self.assertIn("Where you left off", text)
         self.assertIn("refs/hestia/", text)
+
+
+class TestPruneSnapshots(TempHome):
+    """done deletes refs/hestia snapshots older than keep_snapshots_days."""
+
+    def snapshot_ref(self, days_ago):
+        when = datetime.now().astimezone() - timedelta(days=days_ago)
+        return "refs/hestia/%s" % when.strftime("%Y-%m-%d-%H%M%S")
+
+    def add_ref(self, repo, ref):
+        self.assertTrue(hestia.git(repo, ["update-ref", ref, "HEAD"]).ok, ref)
+
+    def refs(self, repo):
+        out = hestia.git(repo, ["for-each-ref", "--format=%(refname)", "refs/hestia"]).out
+        return set(out.split())
+
+    def run_in(self, repo, command, **args):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(str(repo))
+        try:
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(command(hestia.argparse.Namespace(**args)), 0)
+        finally:
+            os.chdir(cwd)
+        return json.loads(out.getvalue())
+
+    def done(self, repo, config=None):
+        if config is not None:
+            hestia.write_json(self.home / "config.json", config)
+        return self.run_in(
+            repo, hestia.cmd_shutdown, note="", until="", json=True, next="",
+            keep_agents=True,  # never touch real processes from a test
+            stop_all=False,
+        )
+
+    def test_the_default_limit_is_thirty_days(self):
+        self.assertEqual(hestia.load_config()["keep_snapshots_days"], 30)
+
+    def test_deletes_old_keeps_recent_and_todays(self):
+        repo = self.make_repo()
+        (repo / "wip.txt").write_text("half done\n")
+        old, recent = self.snapshot_ref(45), self.snapshot_ref(5)
+        self.add_ref(repo, old)
+        self.add_ref(repo, recent)
+
+        result = self.done(repo)
+
+        today = result["snapshots"][0]["ref"]
+        self.assertTrue(today)
+        self.assertEqual(self.refs(repo), {recent, today})
+        self.assertEqual(result["pruned"], [{"repo": str(hestia.git_toplevel(repo)), "ref": old}])
+
+    def test_clean_repos_are_pruned_too(self):
+        repo = self.make_repo()
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        result = self.done(repo)
+        self.assertEqual(result["saved"], 0)
+        self.assertEqual(self.refs(repo), set())
+
+    def test_zero_or_less_keeps_everything(self):
+        for keep_days in (0, -1, "never", None, True):
+            repo = self.make_repo("repo-%s" % keep_days)
+            old = self.snapshot_ref(400)
+            self.add_ref(repo, old)
+            result = self.done(repo, config={"keep_snapshots_days": keep_days})
+            self.assertIn(old, self.refs(repo), keep_days)
+            self.assertEqual(result["pruned"], [], keep_days)
+            hestia.clear_pause()
+
+    def test_names_that_are_not_a_timestamp_are_kept(self):
+        repo = self.make_repo()
+        names = [
+            "refs/hestia/keep-me",
+            "refs/hestia/2020-13-45-000000",  # the right shape, not a real date
+            "refs/hestia/2020-01-01-000000-extra",
+            "refs/hestia/old/2020-01-01-000000",
+        ]
+        for name in names:
+            self.add_ref(repo, name)
+        self.done(repo, config={"keep_snapshots_days": 1})
+        self.assertEqual(self.refs(repo), set(names))
+
+    def test_never_deletes_the_snapshot_just_taken(self):
+        repo = self.make_repo()
+        now = datetime.now().astimezone()
+        ref = "refs/hestia/%s" % now.strftime("%Y-%m-%d-%H%M%S")
+        self.add_ref(repo, ref)
+        later = now + timedelta(days=10)
+        self.assertEqual(hestia.prune_snapshots(repo, 1, later, keep={ref}), [])
+        self.assertIn(ref, self.refs(repo))
+        self.assertEqual(hestia.prune_snapshots(repo, 1, later), [ref])
+
+    def test_break_never_prunes(self):
+        repo = self.make_repo()
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        # break never signals anything unless stop_agents is set.
+        self.run_in(repo, hestia.cmd_break, length="30m", json=True, stop_agents=False)
+        self.assertIn(old, self.refs(repo))
+
+    def test_pruning_leaves_the_repo_byte_identical(self):
+        repo = self.make_repo()
+        (repo / "a.txt").write_text("one, edited\n")
+        (repo / "staged.txt").write_text("staged\n")
+        hestia.git(repo, ["add", "staged.txt"])
+        (repo / "new.txt").write_text("never committed\n")
+        old = self.snapshot_ref(45)
+        self.add_ref(repo, old)
+        hestia.git(repo, ["pack-refs", "--all"])  # deleting a packed ref rewrites packed-refs
+
+        def state():
+            # status first: it may refresh the index, which pruning never does.
+            status = hestia.git(repo, ["status", "--porcelain"]).out
+            files = {
+                str(p.relative_to(repo)): p.read_bytes()
+                for p in repo.rglob("*") if p.is_file() and ".git" not in p.parts
+            }
+            git_dir = repo / ".git"
+            return (status, files, (git_dir / "index").read_bytes(),
+                    (git_dir / "HEAD").read_bytes(), hestia.git(repo, ["rev-parse", "HEAD"]).out)
+
+        before = state()
+        self.assertEqual(hestia.prune_snapshots(repo, 30, datetime.now().astimezone()), [old])
+        self.assertEqual(state(), before)
+
+        self.add_ref(repo, old)
+        result = self.done(repo)
+        self.assertEqual([p["ref"] for p in result["pruned"]], [old])
+        self.assertTrue(result["integrity_ok"])
+        self.assertEqual(state(), before)
 
 
 class TestBreak(TempHome):
