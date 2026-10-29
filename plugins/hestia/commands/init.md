@@ -24,11 +24,12 @@ sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init detect --json --seen "<servers>"
 ```
 
 It returns their git name, GitHub login, usual hours from recent sessions, the
-current config, any earlier answers (`profile`), and the connectors found.
+current config, any earlier answers (`profile`), the connectors found, and
+whether this computer seems to have a screen (`has_screen`).
 
 ## 2. One screen of questions
 
-Ask everything in **one** `AskUserQuestion` call with these four questions. Each one
+Ask these four in **one** `AskUserQuestion` call. Each one
 can be skipped, and the first option is always the default. If `profile` or
 `config` already has an answer, make that the first option, labelled "Keep: …".
 
@@ -44,13 +45,31 @@ can be skipped, and the first option is always the default. If `profile` or
 
 Keep the wording plain. This person may not be technical, so don't say "MCP" or "config".
 
-## 3. Connectors, only if there are any
+## 3. A second screen: memory, plus anything else that applies
 
-Only ask about connectors whose `kind` is calendar, chat, tasks or email,
-because those are the ones Hestia has a use for. If there are none, skip this step
-completely and say nothing about connectors. Never suggest installing one.
+One more `AskUserQuestion` call, with up to three questions. The memory question is
+always there, and the other two only when they apply.
 
-Otherwise ask one multi-select question: "Hestia found these. Which may it
+**Memory** (header "Memory"), always: "Tidy Claude's memory when you clock out?"
+Options: "Yes, tidy it" (the default; description: "At /hestia:done, merge
+duplicate notes and drop ones today proved wrong. Backed up first, and it never
+adds anything") and "No, leave it". If `profile.dream` is already set, make that
+the first option, labelled "Keep: …". Save it as `"dream": true|false`.
+
+**A screen** (header "Screen"). Ask only when `has_screen` is false, or when
+`config.screen` is already `true` or `false`. Otherwise leave it out. Ask "Does
+this computer have a screen you can see?" with these options, and make "Keep: …"
+first if `config.screen` is set:
+- "No screen here": a server or a remote login. Hestia won't open pages here, so
+  the dashboard is off. `/hestia:today` gives the same reading.
+- "It has a screen": `/hestia:dashboard` opens its page in the browser.
+
+**Connectors.** Only ask about connectors whose `kind` is calendar, chat, tasks
+or email, because those are the ones Hestia has a use for. If there are none,
+leave this question out and say nothing about connectors. Never suggest
+installing one.
+
+The connectors question is one multi-select: "Hestia found these. Which may it
 use? It only acts when you run a Hestia command." Each option is the connector's
 name, with a description of what Hestia would do with it:
 - calendar: resume at your first meeting and keep lunch free
@@ -67,10 +86,11 @@ Build the answers as JSON and pass it on stdin. Leave out any field the user ski
 ```
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" init write --seen "<servers>" --answers - <<'JSON'
 {"why": "...", "helps": "...", "tone": "plain|warm|detail",
- "resume_hour": 8, "working_days": [0, 1, 2, 3, 4],
+ "resume_hour": 8, "working_days": [0, 1, 2, 3, 4], "screen": true, "dream": true,
  "connectors": {"<connector key>": "allowed|declined"}}
 JSON
 ```
 
-`working_days` uses 0 for Monday. Then print the script's three lines and stop: no
+`working_days` uses 0 for Monday. `screen` is `false` for "No screen here", and
+left out if it wasn't asked. Then print the script's three lines and stop: no
 summary, no tips, no offer to do more.

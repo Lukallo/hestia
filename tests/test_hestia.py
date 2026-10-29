@@ -38,6 +38,8 @@ class TempHome(unittest.TestCase):
         os.environ["HESTIA_SESSION_KIND"] = "interactive"
         os.environ["HESTIA_CLAUDE_DIR"] = str(self.tmp / "claude")
         os.environ["HESTIA_CLAUDE_JSON"] = str(self.tmp / "claude.json")
+        os.environ["HESTIA_MEMORY_ROOT"] = str(self.tmp / "memory-root")
+        os.environ.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
 
     def tearDown(self):
         os.environ.clear()
@@ -211,6 +213,13 @@ class TestPauseAndHook(TempHome):
             "python3 hestia.py dashboard --no-open",  # read-only, so allowed too
             'sh "/plugins/hestia/scripts/hestia" back',  # the launcher
             "sh '/plugins/hestia/scripts/hestia' today",
+            'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back',  # as back.md writes it
+            'bash "/plugins/hestia/scripts/hestia" today',
+            'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" back',  # without the launcher
+            "python3 hestia.py today --json 2>&1",
+            "py -3 hestia.py back",
+            "./hestia.py back",
+            'sh "/plugins/hestia/scripts/hestia" dream restore',  # undo works while paused
         ]:
             self.assertEqual(
                 self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
@@ -218,9 +227,13 @@ class TestPauseAndHook(TempHome):
                 "pause must not block: %s" % command,
             )
 
-    def test_never_blocks_the_way_back_in_from_powershell(self):
+    def test_way_back_in_from_powershell(self):
+        # Claude Code uses a PowerShell tool on Windows without Git Bash.
         self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
         for command in [
+            'python "$env:CLAUDE_PLUGIN_ROOT\\scripts\\hestia.py" back',
+            '& python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
+            '& "C:\\Python314\\python.exe" "C:\\hestia\\hestia.py" today',
             'python "C:\\Users\\me\\.claude\\plugins\\hestia\\scripts\\hestia.py" back',
             "& python 'C:\\Program Files\\hestia\\scripts\\hestia.py' today",
         ]:
@@ -230,9 +243,55 @@ class TestPauseAndHook(TempHome):
                 "pause must not block: %s" % command,
             )
         self.assertEqual(
+            self.hook({"tool_name": "PowerShell", "tool_input": {"command": "Remove-Item build"}}),
+            "deny",
+        )
+        self.assertEqual(
             self.hook({"tool_name": "PowerShell", "tool_input": {"command": "npm test"}}),
             "deny",
         )
+
+    def test_only_the_whole_command_gets_through(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for command in [
+            "python3 hestia.py today && git push",
+            "python3 hestia.py back; npm publish",
+            "python3 hestia.py status | sh",
+            "python3 hestia.py back || npm test",
+            "python3 hestia.py back & npm test",
+            "echo $(python3 hestia.py status; npm publish)",
+            "echo `python3 hestia.py back`",
+            "python3 hestia.py back\nrm -rf build",
+            "python3 hestia.py today > notes.txt",
+            'git commit -m "hestia back online" && git push',
+            'git commit -m "hestia back online"',
+            'python3 -c "import os" hestia.py back',
+            "python3 hestia.py done --keep-agents",  # not a way back in
+            "python3 hestia.py break 5m",
+            'sh "/plugins/hestia/scripts/hestia" back && git push',
+            'sh -c "git push" hestia back',
+            "sh deploy.sh hestia back",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": "Bash", "tool_input": {"command": command}}),
+                "deny",
+                "pause must block: %s" % command,
+            )
+
+    def test_blocks_connectors_subagents_and_other_plugins(self):
+        self.pause_until(datetime.now().astimezone() + timedelta(hours=8))
+        for tool in [
+            "mcp__claude_ai_Slack__slack_send_message",  # a claude.ai connector
+            "mcp__plugin_linear_linear__create_issue",  # a plugin's own MCP server
+            "Agent",  # starting a subagent
+            "Skill",
+            "WebFetch",
+        ]:
+            self.assertEqual(
+                self.hook({"tool_name": tool, "tool_input": {}}),
+                "deny",
+                "pause must block: %s" % tool,
+            )
 
     def test_expired_pause_clears_itself(self):
         self.pause_until(datetime.now().astimezone() - timedelta(minutes=1))
@@ -920,6 +979,15 @@ class TestInitWrite(TempHome):
         profile = hestia.read_json(self.home / "profile.json")
         self.assertEqual((profile["why"], profile["tone"]), ("the craft itself", "detail"))
 
+    def test_the_screen_answer_is_kept_until_changed(self):
+        self.assertIsNone(hestia.load_config()["screen"], "unanswered until init asks")
+        self.write({"screen": False})
+        self.write({"why": "the craft itself"})  # skipped this time
+        self.write({"screen": "no"})  # not a yes or no, so ignored
+        self.assertIs(hestia.load_config()["screen"], False)
+        self.write({"screen": True})
+        self.assertIs(hestia.load_config()["screen"], True)
+
 
 class TestConnectorGate(TempHome):
     def gate(self, name, present=False, set_to=None):
@@ -1010,6 +1078,164 @@ class TestDashboard(TempHome):
         self.render()
         self.assertFalse(hestia.pause_path().exists())
         self.assertFalse((self.home / "TOMORROW.md").exists())
+
+    def dashboard(self, **env_changes):
+        """Run the real CLI with a stand-in browser that only leaves a marker."""
+        browser = self.tmp / "browser.sh"
+        browser.write_text('#!/bin/sh\necho "$1" > "%s"\n' % (self.tmp / "opened"))
+        browser.chmod(0o755)
+        env = dict(os.environ, BROWSER=str(browser))
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            env.pop(name, None)
+        env.update(env_changes)
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hestia.py"), "dashboard"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        marker = self.tmp / "opened"
+        opened = marker.exists()
+        if opened:
+            marker.unlink()
+        return proc.stdout.decode(), opened
+
+    def test_guesses_the_screen_from_the_display(self):
+        for name in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION", "SSH_TTY"):
+            os.environ.pop(name, None)
+        os.environ["SSH_CONNECTION"] = "10.0.0.1 50000 10.0.0.2 22"
+        self.assertFalse(hestia.has_screen(), "a remote login opens nothing you can see")
+        os.environ["DISPLAY"] = ":0"
+        self.assertTrue(hestia.has_screen(), "a forwarded display can show a page")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_opens_a_browser_only_where_there_is_a_screen(self):
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertIn("Dashboard:", out)
+        self.assertFalse(opened, "no screen: write the page, open nothing")
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertTrue(opened)
+        hestia.write_json(self.home / "config.json", {"screen": True})
+        out, opened = self.dashboard(SSH_CONNECTION="10.0.0.1 50000 10.0.0.2 22")
+        self.assertTrue(opened, "the answer from init beats the guess")
+
+    @unittest.skipIf(os.name == "nt", "the stand-in browser is a shell script")
+    def test_off_when_init_says_there_is_no_screen(self):
+        hestia.write_json(self.home / "config.json", {"screen": False})
+        out, opened = self.dashboard(DISPLAY=":0")
+        self.assertIn("No dashboard on this computer", out)
+        self.assertIn("/hestia:today", out)
+        self.assertFalse(opened)
+        self.assertFalse((self.home / "dashboard.html").exists(), "writes nothing at all")
+
+
+class TestDream(TempHome):
+    """Tidying Claude's auto memory at done: facts, backup, check, restore."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = self.tmp / "proj"
+        self.project.mkdir()
+        self.project = self.project.resolve()  # macOS temp paths sit behind /var -> /private/var
+        self.memory = self.tmp / "memory-root" / hestia.memory_slug(self.project) / "memory"
+        self.memory.mkdir(parents=True)
+        self._cwd = os.getcwd()
+        os.chdir(str(self.project))
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        super().tearDown()
+
+    def note(self, name, description, body="text"):
+        (self.memory / (name + ".md")).write_bytes(
+            ("---\nname: %s\ndescription: %s\n---\n%s\n" % (name, description, body)).encode())
+
+    def index(self, *names):
+        (self.memory / "MEMORY.md").write_bytes(
+            "".join("- [%s](%s.md) - x\n" % (n, n) for n in names).encode())
+
+    def snapshot(self):
+        return {p.name: p.read_bytes() for p in self.memory.iterdir()}
+
+    def test_slug_matches_claude_codes_folder_names(self):
+        self.assertEqual(hestia.memory_slug(r"C:\Users\arunn\Downloads\claude_hackathon"),
+                         "C--Users-arunn-Downloads-claude-hackathon")
+        self.assertEqual(hestia.memory_slug("/home/a/my.repo"), "-home-a-my-repo")
+
+    def test_findings(self):
+        self.note("tabs", "indent with tabs")
+        self.note("tabs-again", "indent with tabs please")
+        self.note("orphan", "not in the index")
+        (self.memory / "broken.md").write_bytes(b"no frontmatter\n")
+        self.index("tabs", "tabs-again", "gone")
+        facts = hestia.memory_findings(self.memory)
+        self.assertEqual(facts["index_points_to_missing"], ["gone.md"])
+        self.assertEqual(facts["missing_from_index"], ["broken.md", "orphan.md"])
+        self.assertEqual(facts["broken"], ["broken.md"])
+        self.assertIn(["tabs-again.md", "tabs.md"], [sorted(d) for d in facts["duplicates"]])
+        self.assertFalse(facts["over_load_limit"])
+
+    def test_flags_an_index_too_long_to_load(self):
+        self.note("a", "b")
+        self.index(*["a"] * (hestia.MEMORY_LOAD_LINES + 1))
+        self.assertTrue(hestia.memory_findings(self.memory)["over_load_limit"])
+
+    def test_plan_backs_up_and_restore_is_byte_identical(self):
+        self.note("tabs", "indent with tabs")
+        self.index("tabs")
+        before = self.snapshot()
+        plan = hestia.dream_plan()
+        self.assertTrue(plan["backup"])
+        self.assertEqual(len(plan["projects"]), 1)
+        (self.memory / "tabs.md").write_bytes(b"changed")
+        (self.memory / "MEMORY.md").unlink()
+        self.assertEqual(hestia.dream_restore(), [str(self.memory)])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_check_counts_a_good_tidy(self):
+        self.note("tabs", "indent with tabs")
+        self.note("tabs-again", "indent with tabs please")
+        self.index("tabs", "tabs-again")
+        plan = hestia.dream_plan()
+        (self.memory / "tabs-again.md").unlink()
+        self.index("tabs")
+        result = hestia.dream_check(plan["backup"])[0]
+        self.assertEqual((result["removed"], result["rolled_back"]), (["tabs-again.md"], False))
+        self.assertTrue(result["index_changed"])
+
+    def test_check_rolls_back_a_broken_or_inventive_tidy(self):
+        self.note("tabs", "indent with tabs")
+        self.index("tabs")
+        before = self.snapshot()
+        for damage in ("broken", "invented", "dangling"):
+            plan = hestia.dream_plan()
+            if damage == "broken":
+                (self.memory / "tabs.md").write_bytes(b"lost the frontmatter")
+            elif damage == "invented":
+                self.note("new-fact", "hestia must never add memories")
+            else:
+                self.index("tabs", "nowhere")
+            result = hestia.dream_check(plan["backup"])[0]
+            self.assertTrue(result["rolled_back"], damage)
+            self.assertEqual(self.snapshot(), before, damage)
+
+    def test_nothing_to_do_when_switched_off(self):
+        self.note("tabs", "indent with tabs")
+        os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        self.assertIn("CLAUDE_CODE_DISABLE_AUTO_MEMORY", hestia.dream_plan()["skipped"])
+        del os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"]
+        hestia.write_json(self.tmp / "claude" / "settings.json", {"autoMemoryEnabled": False})
+        self.assertIn("settings", hestia.dream_plan()["skipped"])
+        (self.tmp / "claude" / "settings.json").unlink()
+        hestia.init_write({"dream": False}, str(self.tmp), [])
+        self.assertIn("/hestia:init", hestia.dream_plan()["skipped"])
+        self.assertFalse((self.home / "backups" / "memory").exists(), "nothing backed up when off")
+
+    def test_on_by_default_after_init(self):
+        hestia.init_write({}, str(self.tmp), [])
+        self.assertTrue(hestia.read_json(self.home / "profile.json")["dream"])
+
+    def test_no_memory_means_nothing_to_tidy(self):
+        self.assertEqual(hestia.dream_plan()["skipped"], "no memory to tidy")
 
 
 class TestEverythingUsesTheLauncher(unittest.TestCase):

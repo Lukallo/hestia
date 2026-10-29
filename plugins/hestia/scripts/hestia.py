@@ -11,11 +11,12 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
     hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
     hestia.py connector NAME [--present] [--set allowed|declined]
-    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
+    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page; off with no screen
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py prompt-submit   # UserPromptSubmit hook, the same handover for a window left open
     hestia.py handover [--again]  # show whether the morning list is still due, or re-arm it
+    hestia.py dream plan|check|restore [--backup ID] [--json]  # tidy Claude's memory at done
     hestia.py selftest        # proves the whole flow on a throwaway repo
 
 Environment overrides (used by the tests and selftest):
@@ -24,6 +25,7 @@ Environment overrides (used by the tests and selftest):
     HESTIA_CLAUDE_DIR     where the user's CLAUDE.md lives, default ~/.claude
     HESTIA_CLAUDE_JSON    Claude Code's config, default ~/.claude.json
     HESTIA_CHANGELOG_URL  where `new` reads the changelog (file:// works)
+    HESTIA_MEMORY_ROOT    Claude Code's auto-memory projects, default ~/.claude/projects
 """
 
 import argparse
@@ -39,6 +41,7 @@ import sys
 import tempfile
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 BREAK_MINUTES = 20
@@ -53,11 +56,26 @@ CHANGELOG_URL = "https://raw.githubusercontent.com/anthropics/claude-code/main/C
 NEW_MAX_RELEASES = 10
 NEW_MAX_CHANGES = 150
 
-# Bash commands matching this are always allowed while paused, otherwise the
-# pause would block the only command that lifts it.
+# The tools Claude Code runs shell commands with. PowerShell is the one it uses
+# on Windows when Git Bash isn't installed.
+SHELL_TOOLS = ("Bash", "PowerShell")
+
+# A shell command matching this is always allowed while paused, otherwise the
+# pause would block the only command that lifts it. It has to be the whole
+# command: one hestia call, with an optional interpreter in front (python,
+# or sh for the launcher the commands use).
 RESUME_PATTERN = re.compile(
-    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest)\b"
+    r"""^
+    (?:(?:"[^"]*(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)"|(?:[^\s"']*[/\\])?(?:python[\w.]*|(?:ba)?sh(?:\.exe)?)|py(?:\s+-3(?:\.\d+)?)?)\s+)?
+    (?:"(?:[^"]*[/\\])?hestia(?:\.py)?"|'(?:[^']*[/\\])?hestia(?:\.py)?'|(?:[^\s"']*[/\\])?hestia(?:\.py)?)
+    \s+(back|resume|today|status|dashboard|hook|session-start|prompt-submit|handover|selftest|dream\s+restore)\b
+    """,
+    re.X | re.I,
 )
+
+# Anything that could run a second command never counts as the way back in:
+# chaining, pipes, redirects, subshells and new lines.
+SHELL_JOINERS = re.compile(r"[;&|`\n\r<>]|\$\(")
 
 
 # --------------------------------------------------------------------------
@@ -77,11 +95,12 @@ def load_config():
         "resume_hour": DEFAULT_RESUME_HOUR,
         "working_days": list(DEFAULT_WORKING_DAYS),
         "repos": [],
+        "screen": None,  # set by init; None means guess with has_screen()
     }
     path = hestia_home() / "config.json"
     if path.exists():
         try:
-            cfg.update(json.loads(path.read_text()))
+            cfg.update(json.loads(path.read_text(encoding="utf-8")))
         except (ValueError, OSError):
             pass
     return cfg
@@ -89,7 +108,7 @@ def load_config():
 
 def read_json(path, default=None):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return default
 
@@ -97,7 +116,7 @@ def read_json(path, default=None):
 def write_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +376,17 @@ def snapshot_repo(repo, ref, message):
     return info
 
 
+def restore_line(repo, ref):
+    """The one command that brings saved work back.
+
+    Forward slashes and POSIX quoting keep it pasteable into bash, zsh, Git
+    Bash and PowerShell, including Windows paths and folders with spaces.
+    """
+    import shlex
+
+    return "git -C %s checkout %s -- ." % (shlex.quote(Path(repo).as_posix()), ref)
+
+
 # --------------------------------------------------------------------------
 # running agents
 # --------------------------------------------------------------------------
@@ -606,9 +636,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
                     "" if snap["dirty_files"] == 1 else "s",
                 )
             )
-            lines.append(
-                "  `git -C %s checkout %s -- .`" % (snap["repo"], snap["ref"])
-            )
+            lines.append("  `%s`" % restore_line(snap["repo"], snap["ref"]))
             last = git(snap["repo"], ["log", "-1", "--format=%s"])
             if last.ok and last.out:
                 lines.append("  last commit: %s" % _one_line(last.out, 120))
@@ -686,7 +714,7 @@ def write_tomorrow(now, note, snapshots, load, prompts, stopped=None, still_open
 
     path = hestia_home() / "TOMORROW.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
@@ -809,7 +837,7 @@ def cmd_resume(args):
         # doesn't hand the same list over a second time.
         due = handover_due(tomorrow)
         if due and claim_handover(due, via="back"):
-            first = start_here(tomorrow.read_text())
+            first = start_here(tomorrow.read_text(encoding="utf-8", errors="replace"))
             if first:
                 print("Start here: %s" % first)
             fact = overnight_fact(due)
@@ -864,7 +892,7 @@ def cmd_break(args):
                 {
                     "repo": s["repo"],
                     "ref": s["ref"],
-                    "restore": "git -C %s checkout %s -- ." % (s["repo"], s["ref"]),
+                    "restore": restore_line(s["repo"], s["ref"]),
                 }
                 for s in saved
             ],
@@ -1149,11 +1177,11 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     if snapshots:
         snaps = "".join(
             "<li><div>%s <small>%s</small>"
-            '<code class="snap">git -C %s checkout %s -- .</code></div></li>'
+            '<code class="snap">%s</code></div></li>'
             % (
                 _esc(Path(s["repo"]).name),
                 _esc(human(s["at"]) if s["at"] else ""),
-                _esc(s["repo"]), _esc(s["ref"]),
+                _esc(restore_line(s["repo"], s["ref"])),
             )
             for s in snapshots
         )
@@ -1197,9 +1225,24 @@ def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
     }
 
 
+def has_screen():
+    """A guess: would a page opened here reach a screen someone is looking at?"""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False  # over SSH even a Mac would open it on its own screen, not yours
+    return sys.platform == "darwin" or os.name == "nt"
+
+
 def cmd_dashboard(args):
-    now = datetime.now().astimezone()
     cfg = load_config()
+    if cfg.get("screen") is False:
+        # The user told init there is no screen here, so there is no page to open.
+        print("No dashboard on this computer: it has no screen. /hestia:today gives the same reading.")
+        print("To change that, run /hestia:init again.")
+        return 0
+
+    now = datetime.now().astimezone()
     pause = read_pause(now)
     start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     prompts = read_prompts(start_of_day)
@@ -1207,18 +1250,33 @@ def cmd_dashboard(args):
     snapshots = list_snapshots(discover_repos(prompts, cfg))
 
     tomorrow_path = hestia_home() / "TOMORROW.md"
-    tomorrow_text = tomorrow_path.read_text() if tomorrow_path.exists() else ""
+    tomorrow_text = tomorrow_path.read_text(encoding="utf-8", errors="replace") if tomorrow_path.exists() else ""
 
     out = Path(args.out) if args.out else hestia_home() / "dashboard.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text), encoding="utf-8")
     print("Dashboard: %s" % out)
 
-    if not args.no_open:
+    # Without an answer from init, only open a browser where there's a display.
+    # On a server it would do nothing, or start a text browser and hang.
+    if not args.no_open and (cfg.get("screen") is True or has_screen()):
         import webbrowser
 
         webbrowser.open(out.resolve().as_uri())
     return 0
+
+
+def is_way_back_in(tool, tool_input):
+    """True only for a single shell command that lifts the pause or reads it."""
+    if tool not in SHELL_TOOLS:
+        return False
+    command = str(tool_input.get("command") or "").strip()
+    command = re.sub(r"\s*2>&1\s*$", "", command)  # folding stderr in runs nothing new
+    if command.startswith("&"):  # PowerShell's call operator
+        command = command[1:].lstrip()
+    if SHELL_JOINERS.search(command):
+        return False
+    return bool(RESUME_PATTERN.match(command))
 
 
 def cmd_hook(args):
@@ -1236,11 +1294,9 @@ def cmd_hook(args):
     tool = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
 
-    # Never block the way back in. On Windows, Claude may run it in PowerShell.
-    if tool in ("Bash", "PowerShell"):
-        command = str(tool_input.get("command") or "")
-        if RESUME_PATTERN.search(command):
-            return 0
+    # Never block the way back in.
+    if is_way_back_in(tool, tool_input):
+        return 0
 
     if pause.get("kind") == "break":
         reason = "%s Run /hestia:back to end it early." % pause_line(pause)
@@ -1500,7 +1556,7 @@ def _deliver_handover(event):
         return 0
     if session_is_headless():
         return 0  # leave it for the person
-    text = tomorrow.read_text().strip()
+    text = tomorrow.read_text(encoding="utf-8", errors="replace").strip()
     if not text:
         return 0
     if not claim_handover(due, via=event, session=str(payload.get("session_id") or ""),
@@ -1579,7 +1635,7 @@ def last_note():
     """The note from the most recent `done`, if the list is still there."""
     tomorrow = hestia_home() / "TOMORROW.md"
     try:
-        for line in tomorrow.read_text().splitlines():
+        for line in tomorrow.read_text(encoding="utf-8", errors="replace").splitlines():
             if line.startswith("> "):
                 return line[2:].strip()
     except OSError:
@@ -1965,6 +2021,7 @@ def detect_environment(cwd, seen=(), now=None):
             "has_hestia_section": SECTION_START in md_text,
         },
         "config": load_config(),
+        "has_screen": has_screen(),
         "profile": read_json(profile_path()),
         "connectors": detect_connectors(cwd, seen),
         "consent": {
@@ -2082,6 +2139,10 @@ def _clean_answers(raw):
     days = raw.get("working_days")
     if isinstance(days, list) and days and all(isinstance(d, int) and 0 <= d <= 6 for d in days):
         answers["working_days"] = sorted(set(days))
+    if isinstance(raw.get("screen"), bool):
+        answers["screen"] = raw["screen"]
+    if isinstance(raw.get("dream"), bool):
+        answers["dream"] = raw["dream"]
     consent = raw.get("connectors") or {}
     answers["connectors"] = {
         connector_key(k): v for k, v in consent.items() if v in ("allowed", "declined")
@@ -2096,9 +2157,10 @@ def init_write(answers, cwd, seen=(), now=None):
     detected = detect_environment(cwd, seen, now)
 
     profile = dict(detected["profile"] or {})
-    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone") if k in answers})
+    profile.update({k: answers[k] for k in ("name", "why", "helps", "tone", "dream") if k in answers})
     profile.setdefault("name", detected["name"])
     profile.setdefault("tone", "plain")
+    profile.setdefault("dream", True)
     profile["github_login"] = detected["github_login"]
     profile["hours"] = detected["hours"]
     profile["updated_at"] = now.isoformat()
@@ -2106,7 +2168,7 @@ def init_write(answers, cwd, seen=(), now=None):
 
     config_file = hestia_home() / "config.json"
     raw_config = read_json(config_file) or {}
-    for field in ("resume_hour", "working_days"):
+    for field in ("resume_hour", "working_days", "screen"):
         if field in answers:
             raw_config[field] = answers[field]
     write_json(config_file, raw_config)
@@ -2186,6 +2248,7 @@ def cmd_init(args):
     print("Usual day: %s" % ("%s to %s, over %d days" % (hours["usual_start"], hours["usual_end"], hours["days_seen"])
                              if hours else "no history yet"))
     print("Connectors: %s" % (", ".join(sorted(detected["connectors"])) or "none found"))
+    print("Screen: %s" % ("yes" if detected["has_screen"] else "none found"))
     print("CLAUDE.md: %s" % ("has a Hestia section" if detected["claude_md"]["has_hestia_section"]
                              else "exists" if detected["claude_md"]["exists"] else "not created yet"))
     return 0
@@ -2234,6 +2297,270 @@ def cmd_connector(args):
 
 
 # --------------------------------------------------------------------------
+# dream: tidy Claude's auto memory as the day ends
+# --------------------------------------------------------------------------
+#
+# Claude Code keeps auto memory in ~/.claude/projects/<project>/memory/: a
+# MEMORY.md index plus one file per topic. Only the first 200 lines (25 KB) of
+# the index load each session, so a long or messy index silently loses facts.
+# At `done` the ending session tidies it: plan (backup + facts), Claude edits,
+# check (validate, or roll back). Hestia never writes a memory itself.
+
+MEMORY_INDEX = "MEMORY.md"
+MEMORY_LOAD_LINES = 200
+MEMORY_LOAD_BYTES = 25 * 1024
+LINK_PATTERN = re.compile(r"\]\(([^)\s]+\.md)\)")
+
+
+def memory_root():
+    return Path(os.environ.get("HESTIA_MEMORY_ROOT") or (Path.home() / ".claude" / "projects"))
+
+
+def memory_slug(path):
+    """How Claude Code names a project folder: every non-alphanumeric becomes '-'."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def memory_dirs_for(cwd):
+    """The memory folder for a working directory, trying the folder and its git root."""
+    candidates = [Path(cwd)]
+    top = git_toplevel(Path(cwd)) if Path(cwd).is_dir() else None
+    if top is not None:
+        candidates.append(top)
+    found = []
+    for candidate in candidates:
+        folder = memory_root() / memory_slug(candidate) / "memory"
+        if folder.is_dir() and folder not in found:
+            found.append(folder)
+    return found
+
+
+def auto_memory_off():
+    """Why auto memory is off, or None. Honours Claude Code's own switches."""
+    if os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "").strip() not in ("", "0", "false"):
+        return "auto memory is turned off (CLAUDE_CODE_DISABLE_AUTO_MEMORY)"
+    settings = read_json(claude_dir() / "settings.json") or {}
+    if settings.get("autoMemoryEnabled") is False:
+        return "auto memory is turned off in Claude Code's settings"
+    if settings.get("autoMemoryDirectory"):
+        return "auto memory lives in a custom folder, which Hestia leaves alone"
+    if (read_json(profile_path()) or {}).get("dream") is False:
+        return "memory tidying is turned off in /hestia:init"
+    return None
+
+
+def parse_memory_file(path):
+    """Frontmatter of one memory file: {'name', 'description', 'type'} or None if broken."""
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    lines = text.replace("\r\n", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return None
+    fields = {}
+    for line in lines[1:end]:
+        match = re.match(r"\s*([A-Za-z_]+)\s*:\s*(.*)$", line)
+        if match:
+            fields[match.group(1).lower()] = match.group(2).strip()
+    if not fields.get("name") or not fields.get("description"):
+        return None
+    return {"name": fields["name"], "description": fields["description"], "type": fields.get("type", "")}
+
+
+def _normal(text):
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def memory_findings(folder):
+    """Facts about one memory folder. Deterministic; the tidying is Claude's."""
+    index_path = folder / MEMORY_INDEX
+    index_text = index_path.read_bytes().decode("utf-8", "replace") if index_path.exists() else ""
+    linked = set(LINK_PATTERN.findall(index_text))
+    files, broken = [], []
+    for path in sorted(folder.glob("*.md")):
+        if path.name == MEMORY_INDEX:
+            continue
+        meta = parse_memory_file(path)
+        if meta is None:
+            broken.append(path.name)
+            continue
+        files.append(dict(meta, file=path.name, lines=len(path.read_bytes().splitlines())))
+
+    duplicates = []
+    for i, first in enumerate(files):
+        for second in files[i + 1:]:
+            same_name = _normal(first["name"]) == _normal(second["name"])
+            close = SequenceMatcher(None, _normal(first["description"]), _normal(second["description"])).ratio()
+            if same_name or close >= 0.8:
+                duplicates.append([first["file"], second["file"]])
+
+    names = {f["file"] for f in files} | set(broken)
+    index_lines = len(index_text.splitlines())
+    return {
+        "folder": str(folder),
+        "files": files,
+        "broken": broken,
+        "missing_from_index": sorted(names - linked),
+        "index_points_to_missing": sorted(link for link in linked if not (folder / link).exists()),
+        "duplicates": duplicates,
+        "index_lines": index_lines,
+        "index_bytes": len(index_text.encode("utf-8")),
+        "over_load_limit": index_lines > MEMORY_LOAD_LINES or len(index_text.encode("utf-8")) > MEMORY_LOAD_BYTES,
+    }
+
+
+def _memory_backup_root():
+    return hestia_home() / "backups" / "memory"
+
+
+def _copy_folder(source, target):
+    if target.exists():
+        shutil.rmtree(str(target))
+    shutil.copytree(str(source), str(target))
+
+
+def dream_plan(now=None):
+    """Back up today's projects' memory and return the facts to tidy from."""
+    now = now or datetime.now().astimezone()
+    off = auto_memory_off()
+    if off:
+        return {"backup": None, "projects": [], "skipped": off}
+
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    prompts = read_prompts(start_of_day)
+    cwds = []
+    for cwd in [p["cwd"] for p in prompts if p["cwd"]] + [os.getcwd()]:
+        if cwd not in cwds:
+            cwds.append(cwd)
+
+    projects, seen = [], set()
+    for cwd in cwds:
+        for folder in memory_dirs_for(cwd):
+            if str(folder) in seen or not any(p.name != MEMORY_INDEX for p in folder.glob("*.md")):
+                continue
+            seen.add(str(folder))
+            facts = memory_findings(folder)
+            facts["prompts_today"] = [
+                p["text"][:200] for p in prompts if p["cwd"] and _same_path(p["cwd"], cwd)
+            ][-15:]
+            projects.append(facts)
+
+    if not projects:
+        return {"backup": None, "projects": [], "skipped": "no memory to tidy"}
+
+    backup = now.strftime("%Y-%m-%d-%H%M%S")
+    root = _memory_backup_root() / backup
+    manifest = {}
+    for facts in projects:
+        folder = Path(facts["folder"])
+        key = folder.parent.name
+        _copy_folder(folder, root / key)
+        manifest[key] = str(folder)
+    write_json(root / "manifest.json", manifest)
+    return {"backup": backup, "projects": projects, "skipped": None}
+
+
+def _latest_backup():
+    root = _memory_backup_root()
+    found = sorted(p.name for p in root.iterdir() if (p / "manifest.json").exists()) if root.exists() else []
+    return found[-1] if found else None
+
+
+def dream_restore(backup=None):
+    """Put every folder in a backup back exactly. Returns the folders restored."""
+    backup = backup or _latest_backup()
+    if not backup:
+        return []
+    root = _memory_backup_root() / backup
+    manifest = read_json(root / "manifest.json") or {}
+    restored = []
+    for key, folder in manifest.items():
+        _copy_folder(root / key, Path(folder))
+        restored.append(folder)
+    return restored
+
+
+def dream_check(backup):
+    """Validate the tidy against its backup. A folder that fails is rolled back."""
+    root = _memory_backup_root() / backup
+    manifest = read_json(root / "manifest.json")
+    if manifest is None:
+        raise ValueError("no memory backup called %s" % backup)
+    results = []
+    for key, folder in manifest.items():
+        folder, before = Path(folder), root / key
+        old = {p.name: p.read_bytes() for p in before.glob("*.md")}
+        new = {p.name: p.read_bytes() for p in folder.glob("*.md")} if folder.is_dir() else {}
+        facts = memory_findings(folder) if folder.is_dir() else None
+        problems = []
+        if facts is None:
+            problems.append("the memory folder is gone")
+        else:
+            if facts["broken"]:
+                problems.append("broken frontmatter: %s" % ", ".join(facts["broken"]))
+            if facts["index_points_to_missing"]:
+                problems.append("index links to missing files: %s" % ", ".join(facts["index_points_to_missing"]))
+        added = sorted(set(new) - set(old))
+        if added:
+            problems.append("new files are not allowed (Hestia never adds memories): %s" % ", ".join(added))
+        result = {
+            "folder": str(folder),
+            "removed": sorted(set(old) - set(new)),
+            "edited": sorted(n for n in set(old) & set(new) if old[n] != new[n] and n != MEMORY_INDEX),
+            "index_changed": old.get(MEMORY_INDEX) != new.get(MEMORY_INDEX),
+            "problems": problems,
+            "rolled_back": False,
+        }
+        if problems:
+            _copy_folder(before, folder)
+            result["rolled_back"] = True
+        results.append(result)
+    return results
+
+
+def cmd_dream(args):
+    try:
+        if args.action == "plan":
+            result = dream_plan()
+        elif args.action == "check":
+            backup = args.backup or _latest_backup()
+            if not backup:
+                print("no memory backup to check against", file=sys.stderr)
+                return 1
+            result = {"backup": backup, "projects": dream_check(backup)}
+        else:
+            result = {"restored": dream_restore(args.backup or None)}
+    except (ValueError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.action == "plan":
+        if result["skipped"]:
+            print("Nothing to tidy: %s." % result["skipped"])
+        else:
+            print("Backed up %d memory folder(s) as %s." % (len(result["projects"]), result["backup"]))
+    elif args.action == "check":
+        for project in result["projects"]:
+            if project["rolled_back"]:
+                print("Rolled back %s: %s" % (project["folder"], "; ".join(project["problems"])))
+            else:
+                print("%s: %d removed, %d edited%s" % (project["folder"], len(project["removed"]),
+                      len(project["edited"]), ", index updated" if project["index_changed"] else ""))
+    else:
+        print("Restored %d memory folder(s)." % len(result["restored"]) if result["restored"]
+              else "No memory backup to restore.")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # selftest
 # --------------------------------------------------------------------------
 
@@ -2264,9 +2591,12 @@ def cmd_selftest(args):
         checks.append((name, ok, detail))
         print("%s %s%s" % ("PASS" if ok else "FAIL", name, (" - " + detail) if detail else ""))
 
+    # A space and text no single code page holds, as real names and notes have.
+    note = "selftest: Łukasz’s café ☕"
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        repo = tmp / "repo"
+        repo = tmp / "my repo"
         repo.mkdir()
         home = tmp / "home"
         logs = tmp / "logs"
@@ -2280,6 +2610,7 @@ def cmd_selftest(args):
         env["HESTIA_SESSION_KIND"] = "interactive"
         env["HESTIA_CLAUDE_DIR"] = str(tmp / "claude")
         env["HESTIA_CLAUDE_JSON"] = str(tmp / "claude.json")
+        env["HESTIA_MEMORY_ROOT"] = str(tmp / "memory-root")
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "hestia selftest"
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "selftest@hestia.local"
 
@@ -2315,7 +2646,7 @@ def cmd_selftest(args):
         index_before = hashlib.sha256((repo / ".git" / "index").read_bytes()).hexdigest()
 
         # --keep-agents: the selftest must never touch real processes.
-        proc = run(["done", "--note", "selftest", "--next", "rerun the selftest", "--keep-agents", "--json"])
+        proc = run(["done", "--note", note, "--next", "rerun the selftest", "--keep-agents", "--json"])
         ok = proc.returncode == 0
         check("done runs", ok, proc.stderr.decode().strip()[:200])
         if not ok:
@@ -2351,6 +2682,28 @@ def cmd_selftest(args):
         )
         check("hook always allows back", decision == "allow")
 
+        decision = _hook_decision(
+            script, {"tool_name": "PowerShell", "tool_input": {"command": 'python "C:\\hestia\\hestia.py" back'}}, env
+        )
+        check("hook allows back from PowerShell", decision == "allow")
+
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" back'}}, env
+        )
+        check("hook allows back through the launcher", decision == "allow")
+
+        # Only the whole command gets through: nothing can ride along with it.
+        decision = _hook_decision(
+            script, {"tool_name": "Bash", "tool_input": {"command": "python3 hestia.py back && npm test"}}, env
+        )
+        check("hook blocks work chained after back", decision == "deny")
+
+        # Connectors and other plugins' tools are paused like any other tool.
+        decision = _hook_decision(
+            script, {"tool_name": "mcp__claude_ai_Slack__slack_send_message", "tool_input": {"text": "hi"}}, env
+        )
+        check("hook blocks connector tools while paused", decision == "deny")
+
         # The morning handover: not while paused, once afterwards, then silent.
         def handover(event="session-start", kind="interactive"):
             got = subprocess.run(
@@ -2376,6 +2729,7 @@ def cmd_selftest(args):
         first = handover("prompt-submit")
         check("a window left open gets it on its next prompt", "Where you left off" in first)
         check("handover carries the note", "selftest" in first)
+        check("non-ASCII text survives the night", note in first)
         check("handover leads with where to start", "Start here" in first and "rerun the selftest" in first)
         check("handover says what ran overnight", "Overnight: nothing ran" in first)
         check("handover happens only once", handover() == "" and handover("prompt-submit") == "")
@@ -2432,6 +2786,18 @@ def cmd_selftest(args):
               and (home / "handover.json").read_bytes() == handover_before)
         back = run(["back"]).stdout.decode()
         check("back ends a break early", "On a break since" in back and "Before the break" in back)
+
+        # The restore line is valid shell, even with a space in the path.
+        import shlex
+
+        restore = shlex.split(back.partition("Before the break: ")[2].strip())
+        rungit(["checkout", "--", "."])
+        (repo / "scratch.txt").unlink()
+        if restore:
+            subprocess.run(restore, cwd=str(tmp), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        check("restore line brings the work back",
+              (repo / "scratch.txt").exists()
+              and (repo / "README.md").read_text(encoding="utf-8") == "committed and then edited\n")
         write_target.write_text(json.dumps({"kind": "break", "until": past}))
         decision = _hook_decision(script, {"tool_name": "Bash", "tool_input": {"command": "npm test"}}, env)
         check("break lifts itself", decision == "allow")
@@ -2460,7 +2826,8 @@ def cmd_selftest(args):
         claude_md.parent.mkdir()
         original = b"# My notes\r\nKeep these exactly.\r\n"
         claude_md.write_bytes(original)
-        answers = {"why": "making things people use", "tone": "plain", "connectors": {"Google_Calendar": "allowed"}}
+        answers = {"why": "making things people use", "tone": "plain", "screen": False,
+                   "connectors": {"Google_Calendar": "allowed"}}
         proc = run(["init", "write", "--seen", "Google_Calendar", "--answers", json.dumps(answers)])
         written = all((home / name).exists() for name in ("profile.json", "config.json", "connectors.json"))
         check("init writes profile, config and connectors", proc.returncode == 0 and written,
@@ -2468,8 +2835,37 @@ def cmd_selftest(args):
         text = claude_md.read_bytes()
         check("init keeps CLAUDE.md outside its markers", text.startswith(original)
               and SECTION_START.encode() in text and b"making things people use" in text)
+        proc = run(["dashboard", "--no-open"])  # never a real browser, even if this breaks
+        check("no dashboard on a computer with no screen",
+              proc.returncode == 0 and "/hestia:today" in proc.stdout.decode()
+              and not (home / "dashboard.html").exists())
         run(["init", "remove"])
         check("init remove restores CLAUDE.md exactly", claude_md.read_bytes() == original)
+
+        # dream: backs up the repo's auto memory, rolls back a bad tidy, restores exactly.
+        # Name the folder from git's view of the repo, as Hestia looks it up
+        # (macOS temp paths sit behind a /var -> /private/var symlink).
+        top = rungit(["rev-parse", "--show-toplevel"]).stdout.decode().strip()
+        memory = tmp / "memory-root" / memory_slug(Path(top)) / "memory"
+        memory.mkdir(parents=True)
+        (memory / "MEMORY.md").write_bytes(b"- [Tabs](tabs.md) - indent with tabs\n")
+        (memory / "tabs.md").write_bytes(b"---\nname: tabs\ndescription: indent with tabs\n---\nUse tabs.\n")
+        before = {p.name: p.read_bytes() for p in memory.iterdir()}
+        env.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        proc = run(["dream", "plan", "--json"])
+        plan = json.loads(proc.stdout.decode() or "{}")
+        check("dream plan backs up today's memory", proc.returncode == 0 and bool(plan.get("backup"))
+              and len(plan.get("projects") or []) == 1, proc.stderr.decode().strip()[:200])
+        (memory / "tabs.md").write_bytes(b"no frontmatter any more\n")
+        (memory / "invented.md").write_bytes(b"---\nname: x\ndescription: y\n---\n")
+        proc = run(["dream", "check", "--json", "--backup", plan.get("backup") or "none"])
+        rolled = (json.loads(proc.stdout.decode() or "{}").get("projects") or [{}])[0].get("rolled_back")
+        after = {p.name: p.read_bytes() for p in memory.iterdir()}
+        check("dream check rolls back a broken tidy", bool(rolled) and after == before)
+        (memory / "tabs.md").write_bytes(b"---\nname: tabs\ndescription: edited\n---\n")
+        run(["dream", "restore"])
+        check("dream restore puts memory back exactly",
+              {p.name: p.read_bytes() for p in memory.iterdir()} == before)
 
     failed = [name for name, ok, _ in checks if not ok]
     print("")
@@ -2480,6 +2876,12 @@ def cmd_selftest(args):
 # --------------------------------------------------------------------------
 
 def main(argv=None):
+    # Claude Code reads hooks and commands as UTF-8 on every OS. Left alone,
+    # Windows uses its ANSI code page here and crashes on names like Łukasz.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(prog="hestia", description="End the working day in Claude Code.")
     sub = parser.add_subparsers(dest="command")
 
@@ -2523,13 +2925,19 @@ def main(argv=None):
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_init)
 
+    p = sub.add_parser("dream", help="tidy Claude's auto memory at done: plan (backup + facts), check, restore")
+    p.add_argument("action", choices=["plan", "check", "restore"])
+    p.add_argument("--backup", default="", help="check/restore: which backup (default: the latest)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_dream)
+
     p = sub.add_parser("connector", help="may Hestia use this connector? exit 0 yes, 10 ask once, 1 no")
     p.add_argument("name", help="connector key or MCP server name")
     p.add_argument("--present", action="store_true", help="it exists right now, so record it if new")
     p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
     p.set_defaults(func=cmd_connector)
 
-    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
+    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it (off with no screen)")
     p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
     p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
     p.set_defaults(func=cmd_dashboard)
