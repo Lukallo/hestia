@@ -14,7 +14,7 @@
 
 - **Your work is saved without being touched.** Uncommitted changes in every repo you worked in today go into a `refs/hestia/<timestamp>` snapshot. Your branch, working tree and index stay exactly as they were.
 - **The agents stop when you do.** Unattended Claude Code runs get `SIGTERM`. Open sessions are paused by a hook until the next working morning.
-- **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, no dashboard.
+- **Picking back up is guaranteed, once.** The first session next morning is handed yesterday's list automatically, a single time, then Hestia goes quiet. No alerts, no prompts, nothing always on screen.
 
 <p align="center">
   <img src="assets/cycle.svg" alt="The day as a fire: tend it during the day, bank it with /hestia:done, keep it overnight while agents are paused, relight it in the morning with yesterday's list ready." width="900">
@@ -75,13 +75,14 @@ Built for the Claude Code Impact Lab, Dublin. The brief: **a shutdown command**.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Three commands, two hooks, nothing else
+## Four commands, two hooks, nothing else
 
 | | Command | What happens |
 |---|---|---|
 | <img src="assets/icons/bank.svg" width="40" alt="Bank: embers covered for the night"> | `/hestia:done [note]` | Saves open work in every repo you touched today, writes tomorrow's list, and pauses Claude until the next working morning |
 | <img src="assets/icons/spark.svg" width="40" alt="Spark: striking a light early"> | `/hestia:back` | Lifts the pause early, and reminds you of the one thing you were mid-way through |
 | <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:today` | Whether you're paused, and today's load, only ever when you ask |
+| <img src="assets/icons/embers.svg" width="40" alt="Embers: reading how warm it's running"> | `/hestia:dashboard` | The same reading on one static page: when you worked today, saved snapshots and tomorrow's list. It opens when you ask and never refreshes |
 
 Plus two things that happen on their own, and nothing else:
 
@@ -198,13 +199,14 @@ The exact line, with the real timestamp, is written into tomorrow's list.
 | Pause state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
+| Dashboard page | `~/.hestia/dashboard.html`, only after `/hestia:dashboard` | delete it |
 | Config | `~/.hestia/config.json` (optional) | delete it |
 
 It never edits your `settings.json`, never writes into your repos' working trees, and never pushes anything.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 19 checks, 22 tests
+## Prove it: 19 checks, 26 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -240,14 +242,14 @@ PASS expired pause clears itself
 
 The selftest runs with `--keep-agents`, so it never touches real processes.
 
-The 22 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 26 unit tests run against real git repositories in temp directories. Nothing is mocked:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 22 tests in 3.153s
+Ran 26 tests in 1.700s
 
 OK
 ```
@@ -259,7 +261,7 @@ OK
 The brief's one rule is that it has to give time back, not help you do more. So:
 
 - **No notifications, reminders or nudges.** Nothing ever interrupts you. Every command runs because you typed it.
-- **No dashboard.** The workload numbers live inside `/hestia:today` and are shown only when asked. A thing you have to check is a thing that costs attention.
+- **No live dashboard.** The workload numbers live inside `/hestia:today`, and `/hestia:dashboard` writes the same facts to a static page, both only when asked. Nothing refreshes, nothing sits open in a tab, and there are no totals or comparisons. A thing you have to check is a thing that costs attention.
 - **No streaks, scores or goals.** Measuring rest turns rest into work.
 - **No summary at shutdown.** `/hestia:done` answers in three lines and stops. A command that ends the day shouldn't give you more to read.
 
@@ -301,10 +303,11 @@ is worth more than six that nearly do.
 ```text
 python3 plugins/hestia/scripts/hestia.py done --note "shipped the import fix"
 python3 plugins/hestia/scripts/hestia.py today
+python3 plugins/hestia/scripts/hestia.py dashboard
 python3 plugins/hestia/scripts/hestia.py back
 ```
 
-`shutdown` also takes `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`.
+`shutdown` also takes `--until HH:MM` (or an ISO timestamp), `--keep-agents`, `--stop-all` and `--json`. `status` takes `--json`. `dashboard` takes `--out PATH` and `--no-open`.
 
 </details>
 
