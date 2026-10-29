@@ -11,6 +11,7 @@ Deterministic engine and standalone CLI. Standard library only, Python 3.8+.
     hestia.py new   [--since VERSION] [--json]              what changed in Claude Code
     hestia.py init  [detect|write|remove] [--seen NAMES] [--answers JSON]
     hestia.py connector NAME [--present] [--set allowed|declined]
+    hestia.py dashboard [--out PATH] [--no-open]            # today, as one static page
     hestia.py hook            # PreToolUse hook, reads JSON on stdin
     hestia.py session-start   # SessionStart hook, hands over yesterday's list
     hestia.py selftest        # proves the whole flow on a throwaway repo
@@ -25,6 +26,7 @@ Environment overrides (used by the tests and selftest):
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -51,7 +53,7 @@ NEW_MAX_CHANGES = 150
 # Bash commands matching this are always allowed while paused, otherwise the
 # pause would block the only command that lifts it.
 RESUME_PATTERN = re.compile(
-    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|hook|session-start|selftest)\b"
+    r"hestia(?:\.py)?['\"]?\s+(back|resume|today|status|dashboard|hook|session-start|selftest)\b"
 )
 
 
@@ -903,6 +905,267 @@ def cmd_status(args):
             print("  no break longer than %d minutes today" % BREAK_MINUTES)
     else:
         print("  no prompts recorded today")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# dashboard: the same reading as `today`, as one static page
+# --------------------------------------------------------------------------
+
+# A page you open, read and close. It never refreshes, never alerts, and shows
+# no totals, scores or comparisons: only today's facts, and only when asked.
+
+DASHBOARD_CSS = """
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #1C1714; color: #A89E97;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 960px; margin: 0 auto; padding: 40px 24px 56px; }
+h1, h2 { font-family: Georgia, "Times New Roman", serif; color: #F6EDE3; font-weight: normal; }
+h1 { font-size: 30px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 0 0 14px; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+code { color: #F4B740; }
+.lede { margin: 0 0 28px; }
+.tile { background: #2A211C; border: 1px solid #3A2E27; border-radius: 14px; padding: 20px 22px; margin-bottom: 18px; }
+.status { font-family: Georgia, serif; font-size: 22px; color: #F6EDE3; margin: 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 18px; margin: 0; }
+.facts dt { font-size: 13px; }
+.facts dd { margin: 2px 0 0; font-size: 22px; color: #F6EDE3; font-variant-numeric: tabular-nums; }
+.facts dd small { font-size: 13px; color: #A89E97; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+.grid .tile { margin: 0; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain li { padding: 7px 0; border-top: 1px solid #3A2E27; display: flex; justify-content: space-between; gap: 12px; }
+ul.plain li:first-child { border-top: 0; }
+ul.plain .n { color: #F6EDE3; font-variant-numeric: tabular-nums; }
+.snap { display: block; margin-top: 2px; word-break: break-all; }
+pre { white-space: pre-wrap; margin: 0; color: #A89E97; }
+.empty { margin: 0; }
+svg text { fill: #A89E97; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.tick { stroke: #E8743B; stroke-width: 2; stroke-linecap: round; }
+.hit:hover + .tick, .hit:focus + .tick { stroke: #F4B740; stroke-width: 3; }
+.hit { fill: transparent; cursor: default; outline: none; }
+.axis { stroke: #3A2E27; stroke-width: 1; }
+.gap { stroke: #6B615B; stroke-width: 1; }
+details { margin-top: 14px; }
+summary { cursor: pointer; font-size: 13px; }
+table { border-collapse: collapse; margin-top: 10px; font-size: 13px; width: 100%; }
+th, td { text-align: left; padding: 5px 10px 5px 0; border-top: 1px solid #3A2E27; }
+th { color: #F6EDE3; font-weight: normal; }
+footer { margin-top: 28px; font-size: 13px; color: #6B615B; }
+"""
+
+
+def _esc(value):
+    return html.escape(str(value), quote=True)
+
+
+def list_snapshots(repos, limit=5):
+    """The most recent refs/hestia snapshots in each repo, newest first."""
+    found = []
+    for repo in repos:
+        result = git(
+            repo,
+            ["for-each-ref", "refs/hestia", "--sort=-creatordate", "--count=%d" % limit,
+             "--format=%(refname)%09%(creatordate:iso-strict)"],
+        )
+        if not result.ok:
+            continue
+        for line in result.out.splitlines():
+            ref, _, when = line.partition("\t")
+            if ref:
+                found.append({"repo": str(repo), "ref": ref, "at": parse_ts(when)})
+    found.sort(key=lambda s: s["at"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return found
+
+
+def _timeline_svg(prompts, now, paused):
+    """Every prompt today as a tick on the hours it happened in.
+
+    Gaps of BREAK_MINUTES or more are marked, because those are the breaks.
+    One series, so no legend: the heading names it.
+    """
+    width, height = 960, 104
+    left, right, base = 16, 944, 74
+    start = prompts[0]["at"].replace(minute=0, second=0, microsecond=0)
+    end_at = prompts[-1]["at"] if paused else max(prompts[-1]["at"], now)
+    end = end_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    span = (end - start).total_seconds() or 1.0
+
+    def x(when):
+        return left + (right - left) * (when - start).total_seconds() / span
+
+    parts = [
+        '<svg viewBox="0 0 %d %d" width="100%%" role="img" aria-labelledby="tl-title">' % (width, height),
+        '<title id="tl-title">Prompts today, from %s to %s</title>'
+        % (prompts[0]["at"].strftime("%H:%M"), prompts[-1]["at"].strftime("%H:%M")),
+        '<line class="axis" x1="%d" y1="%d" x2="%d" y2="%d"/>' % (left, base, right, base),
+    ]
+
+    hours = int(span // 3600)
+    step = 1 if hours <= 12 else 2
+    for i in range(0, hours + 1, step):
+        when = start + timedelta(hours=i)
+        parts.append(
+            '<text x="%.1f" y="%d" text-anchor="middle">%s</text>'
+            % (min(max(x(when), left + 14), right - 14), base + 22, when.strftime("%H:%M"))
+        )
+
+    for earlier, later in zip(prompts, prompts[1:]):
+        minutes = int((later["at"] - earlier["at"]).total_seconds() / 60)
+        if minutes < BREAK_MINUTES:
+            continue
+        x1, x2 = x(earlier["at"]) + 4, x(later["at"]) - 4
+        if x2 - x1 < 8:
+            continue
+        parts.append(
+            '<path class="gap" d="M%.1f 18v5H%.1fv-5" fill="none"/>' % (x1, x2)
+        )
+        if x2 - x1 >= 48:
+            parts.append(
+                '<text x="%.1f" y="13" text-anchor="middle">%d min</text>'
+                % ((x1 + x2) / 2, minutes)
+            )
+
+    for prompt in prompts:
+        px = x(prompt["at"])
+        label = "%s · %s" % (prompt["at"].strftime("%H:%M"), Path(prompt["cwd"]).name or "no project")
+        parts.append(
+            '<rect class="hit" x="%.1f" y="26" width="10" height="%d" tabindex="0">'
+            '<title>%s</title></rect>' % (px - 5, base - 26, _esc(label))
+        )
+        parts.append('<line class="tick" x1="%.1f" y1="34" x2="%.1f" y2="%d"/>' % (px, px, base - 2))
+
+    parts.append("</svg>")
+    return "\n".join(parts)
+
+
+def render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text):
+    """One self-contained HTML page. No scripts, no network, nothing that refreshes."""
+    if pause:
+        status = _esc(pause_line(pause))
+        if pause.get("note"):
+            status += " <small>%s</small>" % _esc(pause["note"])
+    else:
+        status = "Working."
+
+    if load["prompts"]:
+        if load["last_break_at"]:
+            last_break = "%d min <small>at %s</small>" % (
+                load["last_break_minutes"], load["last_break_at"].strftime("%H:%M"))
+        else:
+            last_break = "none <small>longer than %d min</small>" % BREAK_MINUTES
+        facts = (
+            '<dl class="facts">'
+            "<div><dt>Prompts</dt><dd>%d</dd></div>"
+            "<div><dt>Projects</dt><dd>%d</dd></div>"
+            "<div><dt>First to last</dt><dd>%s <small>hours, %s–%s</small></dd></div>"
+            "<div><dt>Last real break</dt><dd>%s</dd></div>"
+            "</dl>"
+        ) % (
+            load["prompts"], len(load["projects"]), load["span_hours"],
+            load["first"].strftime("%H:%M"), load["last"].strftime("%H:%M"), last_break,
+        )
+        rows = "".join(
+            "<tr><td>%s</td><td>%s</td></tr>"
+            % (p["at"].strftime("%H:%M"), _esc(Path(p["cwd"]).name or "no project"))
+            for p in prompts
+        )
+        timeline = (
+            '<section class="tile"><h2>When you were working</h2>%s'
+            "<details><summary>As a table</summary>"
+            "<table><thead><tr><th>Time</th><th>Project</th></tr></thead><tbody>%s</tbody></table>"
+            "</details></section>"
+        ) % (_timeline_svg(prompts, now, bool(pause)), rows)
+
+        counts = {}
+        for p in prompts:
+            if p["cwd"]:
+                counts[p["cwd"]] = counts.get(p["cwd"], 0) + 1
+        projects = "".join(
+            '<li><span title="%s">%s</span><span class="n">%d</span></li>'
+            % (_esc(cwd), _esc(Path(cwd).name), n)
+            for cwd, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ) or "<li>none recorded</li>"
+    else:
+        facts = '<p class="empty">No prompts recorded today.</p>'
+        timeline = ""
+        projects = "<li>none recorded</li>"
+
+    if snapshots:
+        snaps = "".join(
+            "<li><div>%s <small>%s</small>"
+            '<code class="snap">git -C %s checkout %s -- .</code></div></li>'
+            % (
+                _esc(Path(s["repo"]).name),
+                _esc(human(s["at"]) if s["at"] else ""),
+                _esc(s["repo"]), _esc(s["ref"]),
+            )
+            for s in snapshots
+        )
+    else:
+        snaps = "<li>no snapshots yet</li>"
+
+    tomorrow = (
+        "<pre>%s</pre>" % _esc(tomorrow_text.strip())
+        if tomorrow_text and tomorrow_text.strip()
+        else '<p class="empty">No list yet. <code>/hestia:done</code> writes one.</p>'
+    )
+
+    return """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hestia · %(date)s</title>
+<style>%(css)s</style></head>
+<body><main>
+<h1>Hestia</h1>
+<p class="lede">%(date)s. The same reading as <code>/hestia:today</code>, on one page.</p>
+<section class="tile"><p class="status">%(status)s</p></section>
+<section class="tile"><h2>Today</h2>%(facts)s</section>
+%(timeline)s
+<div class="grid">
+<section class="tile"><h2>Projects</h2><ul class="plain">%(projects)s</ul></section>
+<section class="tile"><h2>Saved work</h2><ul class="plain">%(snaps)s</ul></section>
+</div>
+<section class="tile" style="margin-top:18px"><h2>Tomorrow's list</h2>%(tomorrow)s</section>
+<footer>Read at %(time)s. This page doesn't refresh: run <code>hestia.py dashboard</code> again for a new reading.</footer>
+</main></body></html>
+""" % {
+        "css": DASHBOARD_CSS,
+        "date": now.strftime("%A %d %B"),
+        "time": now.strftime("%H:%M"),
+        "status": status,
+        "facts": facts,
+        "timeline": timeline,
+        "projects": projects,
+        "snaps": snaps,
+        "tomorrow": tomorrow,
+    }
+
+
+def cmd_dashboard(args):
+    now = datetime.now().astimezone()
+    cfg = load_config()
+    pause = read_pause(now)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    prompts = read_prompts(start_of_day)
+    load = day_load(prompts)
+    snapshots = list_snapshots(discover_repos(prompts, cfg))
+
+    tomorrow_path = hestia_home() / "TOMORROW.md"
+    tomorrow_text = tomorrow_path.read_text() if tomorrow_path.exists() else ""
+
+    out = Path(args.out) if args.out else hestia_home() / "dashboard.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_dashboard(now, pause, prompts, load, snapshots, tomorrow_text), encoding="utf-8")
+    print("Dashboard: %s" % out)
+
+    if not args.no_open:
+        import webbrowser
+
+        webbrowser.open(out.resolve().as_uri())
     return 0
 
 
@@ -1940,6 +2203,11 @@ def main(argv=None):
     p.add_argument("--present", action="store_true", help="it exists right now, so record it if new")
     p.add_argument("--set", choices=["allowed", "declined"], help="record the user's answer")
     p.set_defaults(func=cmd_connector)
+
+    p = sub.add_parser("dashboard", help="write today's reading as one static page and open it")
+    p.add_argument("--out", default="", help="where to write it (default: ~/.hestia/dashboard.html)")
+    p.add_argument("--no-open", action="store_true", help="write the page but don't open a browser")
+    p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser("hook", help="PreToolUse hook (reads JSON on stdin)")
     p.set_defaults(func=cmd_hook)
