@@ -46,10 +46,10 @@ Needs `git` and `python3`, nothing else. Then run `/hestia:init` once (about a m
 | <img src="assets/icons/embers.svg" width="40" alt="Embers icon: the same reading on one page"> | `/hestia:dashboard` | The same reading, plus saved work and tomorrow's list, on one static page that never refreshes |
 | <img src="assets/icons/rest.svg" width="40" alt="Rest icon: the fire turned low at midday"> | `/hestia:break [45m]` | Saves where you are and pauses agents for that long, then lifts itself |
 | <img src="assets/icons/home.svg" width="40" alt="Home icon: the home the fire warms"> | `/hestia:why [who for]` | One plain paragraph on who today's work helps, from your real commits and prompts |
-| <img src="assets/icons/bank.svg" width="40" alt="Bank icon: embers covered for the night"> | `/hestia:done [note]` | Saves open work, writes tomorrow's list, pauses Claude until the next working morning |
-| <img src="assets/icons/spark.svg" width="40" alt="Spark icon: striking a light early"> | `/hestia:back` | Lifts a pause or break early and reminds you where you were |
+| <img src="assets/icons/bank.svg" width="40" alt="Bank icon: embers covered for the night"> | `/hestia:done [note]` | Saves open work, writes tomorrow's list with a "Start here" step, pauses Claude until the next working morning |
+| <img src="assets/icons/spark.svg" width="40" alt="Spark icon: striking a light early"> | `/hestia:back` | Lifts a pause or break early and tells you where to start |
 
-On their own: while you're paused, a hook blocks every tool call except `/hestia:back`, and the first session next morning is handed yesterday's list once, then Hestia goes quiet.
+On their own: while you're paused, a hook blocks every tool call except `/hestia:back`. Next morning the first session you're at (new, resumed, or a window left open, on its next prompt) gets yesterday's list exactly once, with where to start and whether anything ran overnight; scripted runs never take it. Then Hestia goes quiet.
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
@@ -59,7 +59,7 @@ On their own: while you're paused, a hook blocks every tool call except `/hestia
 
 ```text
 Clocked out until Fri 30 Oct 08:00.
-  saved 2 files in demo -> refs/hestia/2026-10-29-190613
+  saved 2 files in demo -> refs/hestia/2026-10-29-192306
   tomorrow's list: ~/.hestia/TOMORROW.md
 ```
 
@@ -74,7 +74,7 @@ Snapshots are built through a temporary git index, so your branch, working tree 
 | Snapshots | `refs/hestia/*` in each repo | `git update-ref -d refs/hestia/<ts>` |
 | Pause or break state | `~/.hestia/pause.json` | `/hestia:back`, or delete the file |
 | Last version `new` showed | `~/.hestia/digest.json` | delete it to see the same changes again |
-| Handover marker | `~/.hestia/handover.json` | delete it to get the list again |
+| Handover marker | `~/.hestia/handover.json`, `~/.hestia/handover-*.taken` | `hestia.py handover --again` to get the list again |
 | Tomorrow's list | `~/.hestia/TOMORROW.md` | delete it |
 | Config | `~/.hestia/config.json` | delete it |
 | Your answers and connector choices | `~/.hestia/profile.json`, `~/.hestia/connectors.json` | delete them, or re-run `/hestia:init` |
@@ -102,7 +102,7 @@ python3 -m unittest discover -s tests
 ```
 
 <details>
-<summary><b>Real output: 32 checks, 63 tests</b></summary>
+<summary><b>Real output: 37 checks, 77 tests</b></summary>
 
 ```text
 PASS done runs
@@ -117,11 +117,16 @@ PASS hook blocks tool use while paused
 PASS hook blocks edits while paused
 PASS hook always allows back
 PASS no handover while still paused
+PASS scripted runs never take the list
+PASS a window left open gets it on its next prompt
+PASS handover carries the note
+PASS handover leads with where to start
+PASS handover says what ran overnight
+PASS handover happens only once
+PASS sessions starting together get it once
+PASS morning gets yesterday's list
 PASS back runs
 PASS old names still work as aliases
-PASS morning gets yesterday's list
-PASS handover carries the note
-PASS handover happens only once
 PASS hook is silent after back
 PASS expired pause clears itself
 PASS break runs
@@ -138,15 +143,15 @@ PASS init writes profile, config and connectors
 PASS init keeps CLAUDE.md outside its markers
 PASS init remove restores CLAUDE.md exactly
 
-32/32 checks passed
+37/37 checks passed
 ```
 
 The unittest report (the commands under test also print their own output, left out here):
 
 ```text
-...............................................................
+.............................................................................
 ----------------------------------------------------------------------
-Ran 63 tests in 15.893s
+Ran 77 tests in 19.596s
 
 OK
 ```
@@ -162,7 +167,7 @@ The selftest never touches real processes and reads a local changelog, so it run
 
 - Agent stopping only reaches Claude Code processes on this machine, found via `ps`. On Windows the pause works but nothing is signalled.
 - The hooks call `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json`.
-- Two sessions starting at the same moment can both get the morning handover.
+- If a scripted run ever gets the morning list, set `HESTIA_SESSION_KIND=headless` in that job's environment.
 - `/hestia:new` needs the network; offline it says it couldn't check.
 - We can't claim burnout goes down. We can claim the day has an end and nothing ran between shutdown and morning.
 
@@ -176,7 +181,7 @@ At `~/.hestia/config.json` (written by `/hestia:init`, or by hand) (`working_day
 
 ### Without Claude Code
 
-The engine is a plain CLI: `python3 plugins/hestia/scripts/hestia.py done --note "..."`, and likewise `init`, `break 45m`, `today`, `dashboard`, `back`, `why`, `new`. `done` takes `--until`, `--keep-agents` and `--stop-all`; `break` takes `--stop-agents`; `dashboard` takes `--out` and `--no-open`; most take `--json`. The old names `shutdown`, `resume` and `status` still work.
+The engine is a plain CLI: `python3 plugins/hestia/scripts/hestia.py done --note "..." --next "..."`, and likewise `init`, `break 45m`, `today`, `dashboard`, `back`, `why`, `new`. `handover` says whether the morning list is still due (`--again` re-arms it). `done` takes `--until`, `--keep-agents` and `--stop-all`; `break` takes `--stop-agents`; `dashboard` takes `--out` and `--no-open`; most take `--json`. The old names `shutdown`, `resume` and `status` still work.
 
 ### How agents are stopped
 
