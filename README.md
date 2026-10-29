@@ -220,7 +220,7 @@ At `/hestia:done`, unattended runs (`claude --print`) get `SIGTERM`, never `SIGK
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-A nod to Kevin Collins and the Dublin Claude Code community he runs: no endless agent loops here, since `/hestia:done` gives every one an end.
+A nod to the Dublin Claude Code community: no endless agent loops here, since `/hestia:done` gives every one an end.
 
 ## Project links
 
