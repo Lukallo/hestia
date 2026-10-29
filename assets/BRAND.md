@@ -4,16 +4,19 @@ One idea runs through everything: **a fire through its daily cycle**. Hestia kep
 fire doesn't burn out because it's tended. Every image here is a stage of that fire, so a reader learns the
 product from the pictures alone.
 
-| Stage | Meaning | Icon | Used for |
-|---|---|---|---|
-| **Tend** | the working day, a steady flame | `icons/tend.svg` | normal work |
-| **Bank** | embers covered with ash for the night | `icons/bank.svg` | `/hestia:shutdown` |
-| **Keep** | one ember guarded under the moon | `icons/keep.svg` | the overnight pause |
-| **Relight** | sunrise over the hearth | `icons/relight.svg` | the morning recap |
-| Spark | striking a light early | `icons/resume.svg` | `/hestia:resume` |
-| Read the embers | how warm it's running | `icons/status.svg` | `/hestia:status` |
-| The home it warms | who the work is for | `icons/plain.svg` | `/hestia:plain` |
-| One piece of kindling | one new thing, not the woodpile | `icons/digest.svg` | `/hestia:digest` |
+Icons are named after the **stage of the fire**, not the command, so they survive command renames.
+
+| Icon | Stage | Meaning | Command today | Planned name |
+|---|---|---|---|---|
+| `icons/tend.svg` | Tend | the working day, a steady flame | normal work | |
+| `icons/rest.svg` | Rest | the fire turned low at midday | | `/hestia:break` |
+| `icons/bank.svg` | Bank | embers covered with ash for the night | `/hestia:shutdown` | `/hestia:done` |
+| `icons/keep.svg` | Keep | one ember guarded under the moon | the overnight pause | |
+| `icons/relight.svg` | Relight | sunrise over the hearth | the morning handover | |
+| `icons/spark.svg` | Spark | striking a light early | `/hestia:resume` | `/hestia:back` |
+| `icons/embers.svg` | Embers | reading how warm it's running | `/hestia:status` | `/hestia:today` |
+| `icons/home.svg` | Home | the home the fire warms: who the work is for | | `/hestia:why` |
+| `icons/kindling.svg` | Kindling | one new thing, not the woodpile | | `/hestia:new` |
 
 ## Files
 
