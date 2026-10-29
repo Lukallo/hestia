@@ -4,7 +4,7 @@ allowed-tools: Bash
 ---
 
 ```
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hestia.py" new --json
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/hestia" new --json
 ```
 
 - If `ok` is false, say in one line that the changelog couldn't be reached, so

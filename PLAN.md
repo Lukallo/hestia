@@ -108,6 +108,7 @@ plugins/hestia/
   commands/   done.md break.md back.md today.md why.md new.md
   hooks/hooks.json            # PreToolUse (pause), SessionStart + UserPromptSubmit (recap), Stop (lunch)
   scripts/hestia.py           # deterministic engine + standalone CLI, stdlib only
+  scripts/hestia              # sh launcher: python3, else python (Windows)
 tests/                        # python -m unittest
 .github/workflows/test.yml    # tests on Windows, macOS and Linux
 README.md

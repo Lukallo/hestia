@@ -30,7 +30,7 @@ In Claude Code:
 /plugin install hestia@hestia
 ```
 
-Needs `git` and `python3`. No other dependencies: the engine is standard library only.
+Needs `git` and Python 3, as `python3` or `python`. No other dependencies: the engine is standard library only. On Windows, install Git for Windows: Claude Code then runs the hooks in its Git Bash.
 
 Once, to set up (about a minute; every question is skippable and has a default):
 
@@ -285,7 +285,7 @@ It never edits your `settings.json`, never writes into your repos' working trees
 
 <p align="center"><img src="assets/meander.svg" alt="" width="900"></p>
 
-## Prove it: 32 checks, 63 tests
+## Prove it: 32 checks, 68 tests
 
 One command builds a throwaway repo, runs the whole flow, and checks every claim on this page:
 
@@ -334,14 +334,14 @@ PASS init remove restores CLAUDE.md exactly
 
 The selftest runs `done` with `--keep-agents` and `break` without `--stop-agents`, so it never touches real processes. Its `new` checks read a local changelog file, so it runs offline.
 
-The 63 unit tests run against real git repositories in temp directories. Nothing is mocked:
+The 68 unit tests run against real git repositories in temp directories. Nothing is mocked. The one stand-in is a fake Windows `python3` placeholder for the launcher tests, since Linux and macOS have none:
 
 ```text
 python3 -m unittest discover -s tests -v
 ```
 
 ```text
-Ran 63 tests in 14.664s
+Ran 68 tests in 7.849s
 
 OK
 ```
@@ -368,7 +368,7 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 ## Honest limitations
 
 - Agent stopping only reaches Claude Code processes on **this machine**, found via `ps`.
-- On Windows the pause works, but nothing is signalled, and the hooks call `python3`.
+- On Windows the pause works, but nothing is signalled, and the hooks need Git for Windows.
 - `/hestia:new` needs the network. Offline it says it couldn't check, and does nothing else.
 - We can't claim burnout goes down. We can claim the day has an end, the agents stopped, and nothing ran between shutdown and morning.
 
@@ -385,7 +385,8 @@ All six commands that [PLAN.md](PLAN.md) designs are built, plus two added later
 - Two sessions starting at the same moment can both receive the morning handover. The marker file has no lock.
 - Repo discovery reads the `cwd` of today's prompts from `~/.claude/projects`. If you worked somewhere Claude Code never saw, add it to `repos` in the config.
 - We can't claim burnout goes down; that takes weeks to show. What we can claim is that the day has an end, the agents stopped overnight, and nothing ran between shutdown and morning.
-- Developed on macOS and Linux. The selftest and unit tests also pass on Windows 11 with Python 3.13, but the plugin hasn't been run end to end inside Claude Code on Windows. The hooks invoke `python3`; on Windows that is usually `python`, so edit `hooks/hooks.json` accordingly.
+- Developed on macOS and Linux. CI runs the selftest and unit tests on Windows from PowerShell, and the selftest again through the launcher in Git Bash. The plugin hasn't been run end to end inside Claude Code on Windows.
+- The hooks and commands start Hestia through `scripts/hestia`, a small `sh` launcher. It uses `python3`, or `python` when `python3` is missing or is the Microsoft Store placeholder. Claude Code runs hooks in Git Bash when Git for Windows is installed. Without it, Claude Code runs them in PowerShell, where the launcher can't start, so the pause isn't enforced. Hestia needs git anyway.
 
 </details>
 
